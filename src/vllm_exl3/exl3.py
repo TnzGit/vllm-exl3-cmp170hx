@@ -760,13 +760,102 @@ def prepare_trellis_arena_plan(
     return stats
 
 
-# Direct-copy component extracted from PR14; no device-policy/MADV changes.
-_DIRECT_FILL_STATS = {"DIRECT_FILL_CALLS": 0, "DIRECT_FILL_BYTES": 0}
+# Process-wide direct-fill counters (prove the real load hits this path).
+_DIRECT_FILL_STATS = {
+    "DIRECT_FILL_CALLS": 0,
+    "DIRECT_FILL_BYTES": 0,
+    "DIRECT_FILL_FALLBACK_CALLS": 0,
+    "DIRECT_FILL_FALLBACK_BYTES": 0,
+    "DIRECT_FILL_DEVICE": "",
+    "MADV_AFTER_H2D_CALLS": 0,
+    "MADV_AFTER_H2D_BYTES": 0,
+}
 
 
-def direct_fill_stats() -> dict[str, int]:
+def direct_fill_stats() -> dict[str, Any]:
     """Return current direct fill call count and byte transfer volume."""
     return dict(_DIRECT_FILL_STATS)
+
+
+def _find_containing_vma(addr: int) -> tuple[int, int, str] | None:
+    """Return (vma_start, vma_end, pathname) for addr from /proc/self/maps."""
+    try:
+        with open("/proc/self/maps", "r", encoding="utf-8") as fh:
+            for line in fh:
+                # e.g. 7f..-7f.. rw-p 00000000 00:00 0  [/path]
+                parts = line.split()
+                if not parts:
+                    continue
+                span = parts[0]
+                if "-" not in span:
+                    continue
+                lo_s, hi_s = span.split("-", 1)
+                lo, hi = int(lo_s, 16), int(hi_s, 16)
+                if lo <= addr < hi:
+                    path = parts[-1] if len(parts) >= 6 and parts[-1].startswith("/") else ""
+                    return lo, hi, path
+    except Exception:
+        return None
+    return None
+
+
+def _madv_dontneed_cpu_tensor(src: "torch.Tensor") -> bool:
+    """Advise kernel to drop COW pages of a *consumed tensor view* after H2D.
+
+    Range is the VIEW byte span (``data_ptr`` + ``numel*element_size``), never
+    the base ``untyped_storage()`` span — advising the storage can discard
+    pages of later unconsumed views of a fused shard (P1).
+
+    Further bounded to the containing VMA, and only applied for file-backed
+    ``*.safetensors`` mappings (the MAP_PRIVATE COW case). Non-contiguous
+    tensors and heap mappings are skipped. Toggle off with
+    ``VLLM_EXL3_MADV_AFTER_H2D=0``.
+    """
+    if os.environ.get("VLLM_EXL3_MADV_AFTER_H2D", "1") == "0":
+        return False
+    if not _TORCH_AVAILABLE or torch is None:
+        return False
+    if not torch.is_tensor(src) or src.device.type != "cpu" or src.numel() == 0:
+        return False
+    # Do not advise spans that contain gaps between elements.
+    if not src.is_contiguous():
+        return False
+    try:
+        import ctypes
+
+        view_start = int(src.data_ptr())
+        view_nbytes = int(src.numel()) * int(src.element_size())
+        if view_start == 0 or view_nbytes <= 0:
+            return False
+        view_end = view_start + view_nbytes
+        vma = _find_containing_vma(view_start)
+        if vma is None:
+            return False
+        vma_lo, vma_hi, vma_path = vma
+        # Only reclaim safetensors MAP_PRIVATE file pages — not arbitrary heap.
+        if not vma_path.endswith(".safetensors"):
+            return False
+        safe_start = max(view_start, vma_lo)
+        safe_end = min(view_end, vma_hi)
+        page = os.sysconf("SC_PAGESIZE")
+        # Page-align INWARD only — never touch adjacent views / heap.
+        start = safe_start + ((page - (safe_start % page)) % page)
+        end = safe_end - (safe_end % page)
+        if end <= start:
+            return False
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        libc.madvise.restype = ctypes.c_int
+        advised = end - start
+        rc = libc.madvise(ctypes.c_void_p(start), ctypes.c_size_t(advised), 4)
+        if rc == 0:
+            _DIRECT_FILL_STATS["MADV_AFTER_H2D_CALLS"] += 1
+            _DIRECT_FILL_STATS["MADV_AFTER_H2D_BYTES"] += advised
+            return True
+    except Exception:
+        return False
+    return False
+
 
 
 def _direct_fill_trellis_slot(
@@ -803,8 +892,15 @@ def _direct_fill_trellis_slot(
     if not src.is_contiguous():
         src = src.contiguous()
     arena[idx].copy_(src, non_blocking=False)
+    if arena.device.type == "cuda" and torch is not None:
+        try:
+            torch.cuda.current_stream().synchronize()
+        except Exception:
+            pass
+    _madv_dontneed_cpu_tensor(src)
     _DIRECT_FILL_STATS["DIRECT_FILL_CALLS"] += 1
     _DIRECT_FILL_STATS["DIRECT_FILL_BYTES"] += transient
+    _DIRECT_FILL_STATS["DIRECT_FILL_DEVICE"] = str(arena.device)
 
 
 def _pack_trellis_arenas(layer: Any) -> dict[str, Any]:
@@ -2714,6 +2810,17 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                     return True if return_success else None
 
                 # Fallback: stage on host; pack in process_weights_after_loading.
+                _fb = int(sharded.numel()) * int(sharded.element_size())
+                _DIRECT_FILL_STATS["DIRECT_FILL_FALLBACK_CALLS"] += 1
+                _DIRECT_FILL_STATS["DIRECT_FILL_FALLBACK_BYTES"] += _fb
+                logger.warning(
+                    "EXL3 trellis staging fallback (no arena plan) layer=%s "
+                    "proj=%s expert=%s — host Anon coexistence risk on UMA",
+                    getattr(owner_mod, "layer_name", None)
+                    or getattr(owner_mod, "prefix", "?"),
+                    proj,
+                    expert_id,
+                )
                 if _exl3_mem_waterfall_enabled():
                     _exl3_mem_snapshot("AFTER_DEST_ALLOC", owner_mod)
                 staged = sharded.detach()
@@ -2792,6 +2899,12 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 f"loaded {tuple(sharded.shape)}"
             )
         dest.copy_(sharded)
+        if dest.device.type == "cuda" and torch is not None:
+            try:
+                torch.cuda.current_stream().synchronize()
+            except Exception:
+                pass
+        _madv_dontneed_cpu_tensor(sharded)
         del loaded, sharded, loaded_weight
         return True if return_success else None
 
@@ -4010,6 +4123,12 @@ class Exl3LinearMethod(LinearMethodBase):
                     f"loaded {tuple(sharded.shape)}"
                 )
             dest.copy_(sharded)
+            if dest.device.type == "cuda" and torch is not None:
+                try:
+                    torch.cuda.current_stream().synchronize()
+                except Exception:
+                    pass
+            _madv_dontneed_cpu_tensor(sharded)
 
         return weight_loader
 
