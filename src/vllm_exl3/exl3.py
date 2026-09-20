@@ -598,8 +598,8 @@ def _trellis_index_from_checkpoint(
     if not isinstance(weight_map, dict):
         raise ValueError("invalid safetensors index weight_map")
 
-    layer_re = re.compile(r"(?:^|\\.)layers\\.(\\d+)\\.")
-    expert_re = re.compile(r"\\.experts\\.(\\d+)\\.([^.]+)\\.trellis$")
+    layer_re = re.compile(r"(?:^|\.)layers\.(\d+)\.")
+    expert_re = re.compile(r"\.experts\.(\d+)\.([^.]+)\.trellis$")
     aliases = {
         "w1": "gate",
         "gate_proj": "gate",
@@ -674,7 +674,7 @@ def _try_prescan_trellis_shapes(
         or getattr(layer, "prefix", None)
         or ""
     )
-    m = re.search(r"layers\\.(\\d+)", layer_name)
+    m = re.search(r"layers\.(\d+)", layer_name)
     if not m:
         return None
     layer_id = int(m.group(1))
