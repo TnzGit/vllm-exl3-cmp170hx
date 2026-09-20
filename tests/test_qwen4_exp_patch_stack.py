@@ -40,18 +40,24 @@ PLE = """class PLE:
 
 MTP = """class MTP:
     def __init__(self, config, prefix):
-        self.lm_head = ParallelLMHead(
-            config.vocab_size,
-            config.hidden_size,
-            prefix=maybe_prefix(prefix, "lm_head"),
-        )
+        if get_pp_group().is_last_rank:
+            if config.tie_word_embeddings:
+                self.lm_head = self.model.embed_tokens
+            else:
+                self.lm_head = ParallelLMHead(
+                    config.vocab_size,
+                    config.hidden_size,
+                    prefix=maybe_prefix(prefix, "lm_head"),
+                )
+        else:
+            self.lm_head = PPMissingLayer()
 """
 
 
 def _tree(tmp_path: Path) -> Path:
     root = tmp_path / "vllm"
     qwen = root / "models" / "qwen4_exp" / "nvidia"
-    qwen.mkdir(parents=True)
+    qwen.mkdir(parents=True, exist_ok=True)
     (qwen / "model.py").write_text(MODEL)
     (qwen / "ple_layer.py").write_text(PLE)
     (qwen / "mtp.py").write_text(MTP)
