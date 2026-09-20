@@ -2,10 +2,12 @@
 
 Primary plan: `docs/CMP170HX_QWEN38_FLASH_NEXT.md`.
 
+Before changing the vLLM runtime, review `docs/UPSTREAM_QWEN_AUDIT.md`.
+
 ## Runtime identity
 
 - [ ] Record exact vLLM artifact/version.
-- [ ] Record exact ExLlamaV3 revision and extension ABI.
+- [ ] Use ExLlamaV3 v1.5.0 tag commit `0740edc2da569fb99174023c1d2988b1e98cb41e` for R0 and record the extension ABI.
 - [ ] Record exact vllm-exl3 SHA.
 - [ ] Record PyTorch, CUDA and driver.
 - [ ] Record exact model revision and config/index hashes.
