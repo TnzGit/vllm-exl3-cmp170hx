@@ -144,8 +144,12 @@ def test_config_tool_emits_unsharded_ngram_spec_from_that_scan(tmp_path):
         for root in ("model.language_model.", "language_model.model.", "model.")
         for leaf in ("layers.0.self_attn.q_proj", "layers.0.self_attn.qkv_proj",
                      "layers.0.self_attn.o_proj")
-    } | {"mtp.layers.0.self_attn.q_proj": 2, "mtp.layers.0.self_attn.qkv_proj": 2,
-         "mtp.layers.6.self_attn.q_proj": 2, "mtp.layers.6.self_attn.qkv_proj": 2}
+    } | {
+        f"{root}mtp.layers.{idx}.self_attn.{leaf}": 2
+        for root in ("", "language_model.", "model.")
+        for idx in (0, 6)
+        for leaf in ("q_proj", "qkv_proj")
+    }
     assert q["non_routed_exl3"]["modules"] == [
         "self_attn.o_proj", "self_attn.q_proj", "self_attn.qkv_proj"
     ]
@@ -155,6 +159,63 @@ def test_config_tool_emits_unsharded_ngram_spec_from_that_scan(tmp_path):
     again = json.load(open(os.path.join(pack, "config.json")))["text_config"]["quantization_config"]
     assert again["ngram_embedding"]["sharded"] is False
     assert again["native_quantization_config"]["quant_method"] == "exl3"
+
+
+def test_config_tool_emits_language_model_prefixed_top_level_linears(tmp_path):
+    """Top-level checkpoint prefixes must also exist under vLLM's module root.
+
+    vLLM mounts the causal LM (and its MTP draft) under a ``language_model.``
+    submodule, so ``lm_head`` and ``mtp.*`` are keyed as
+    ``language_model.lm_head`` / ``language_model.mtp.*``. The exact-dict lookup
+    in ``Exl3Config._bits_for_non_routed`` only matches those names; the bare
+    checkpoint names fall through to the generic ``non_routed_exl3.bits`` and
+    allocate the wrong trellis word count.
+    """
+    pack = str(tmp_path / "pack")
+    os.makedirs(pack, exist_ok=True)
+    tensors: dict[str, tuple[str, tuple[int, ...]]] = {
+        # The scanner derives a dense linear's K as words // 16: K=5 -> 80 words,
+        # K=3 -> 48 words.
+        "lm_head.trellis": ("I16", (160, 80)),
+        "mtp.layers.0.self_attn.q_proj.trellis": ("I16", (160, 48)),
+        "model.language_model.layers.0.self_attn.q_proj.trellis": ("I16", (160, 48)),
+        "model.language_model.layers.0.self_attn.o_proj.trellis": ("I16", (160, 48)),
+    }
+    for layer in (1, 2):
+        for expert in range(2):
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                tensors[
+                    f"model.language_model.layers.{layer}.mlp.experts.{expert}.{proj}.trellis"
+                ] = ("I16", (64, 48))
+    _write_pack(pack, tensors)
+    json.dump(
+        {
+            "text_config": {
+                "num_hidden_layers": 3,
+                "quantization_config": {
+                    "quant_method": "exl3",
+                    "bits": 5,
+                    "codebook": "mcg",
+                },
+            }
+        },
+        open(os.path.join(pack, "config.json"), "w"),
+        indent=2,
+    )
+
+    _scan(pack)
+    assert _run(_CONFIG, pack).returncode == 0
+    q = json.load(open(os.path.join(pack, "config.json")))["text_config"]["quantization_config"]
+    layers = q["non_routed_exl3"]["layers"]
+
+    # lm_head is K=5 while the dense default is K=3, so a missed prefix is visible.
+    assert layers["lm_head"]["bits"] == 5
+    assert layers["language_model.lm_head"]["bits"] == 5
+    assert layers["model.lm_head"]["bits"] == 5
+    for key in ("mtp.layers.0.self_attn.q_proj",
+                "language_model.mtp.layers.0.self_attn.q_proj",
+                "model.mtp.layers.0.self_attn.q_proj"):
+        assert layers[key]["bits"] == 3, key
 
 
 def test_config_tool_keeps_sharded_tables_sharded(tmp_path):
