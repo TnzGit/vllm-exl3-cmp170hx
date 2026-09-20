@@ -2,6 +2,8 @@
 
 Primary plan: `docs/CMP170HX_QWEN38_FLASH_NEXT.md`.
 
+Machine-side work should use branch `bringup/qwen38-flash-next-cmp170hx-r0`, cut from the reviewed scaffold. Keep `research/qwen38-flash-next-cmp170hx` as the scaffold lane.
+
 Before changing the vLLM runtime, review `docs/UPSTREAM_QWEN_AUDIT.md`.
 
 ## CPU gate before touching GPU
