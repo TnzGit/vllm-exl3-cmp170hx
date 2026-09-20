@@ -41,6 +41,10 @@ export VLLM_EXL3_ARENA_PRESCAN="${VLLM_EXL3_ARENA_PRESCAN:-1}"
 export VLLM_EXL3_MADV_AFTER_H2D="${VLLM_EXL3_MADV_AFTER_H2D:-0}"
 export VLLM_EXL3_EXPERT_MATCH_CACHE="${VLLM_EXL3_EXPERT_MATCH_CACHE:-1}"
 export VLLM_EXL3_GC_AFTER_MOE_LAYER="${VLLM_EXL3_GC_AFTER_MOE_LAYER:-0}"
+# The Qwen3.8-Flash-Next routed MoE geometry is eligible for the ExLlamaV3
+# cooperative decode kernel on one CMP170HX. Hardware A/B measured a
+# context-independent 30.19 -> 19.05 ms/output-token win with parity/Xid clean.
+export VLLM_EXL3_COOP="${VLLM_EXL3_COOP:-1}"
 export VLLM_EXL3_NGRAM_TABLE=disk
 export VLLM_EXL3_NGRAM_KERNEL="${VLLM_EXL3_NGRAM_KERNEL:-ext}"
 
@@ -97,6 +101,7 @@ printf '  %-28s %s\n' \
   "VLLM_EXL3_MADV_AFTER_H2D" "$VLLM_EXL3_MADV_AFTER_H2D" \
   "VLLM_EXL3_EXPERT_MATCH_CACHE" "$VLLM_EXL3_EXPERT_MATCH_CACHE" \
   "VLLM_EXL3_GC_AFTER_MOE_LAYER" "$VLLM_EXL3_GC_AFTER_MOE_LAYER" \
+  "VLLM_EXL3_COOP" "$VLLM_EXL3_COOP" \
   "VLLM_EXL3_NGRAM_TABLE" "$VLLM_EXL3_NGRAM_TABLE" \
   "VLLM_EXL3_NGRAM_KERNEL" "$VLLM_EXL3_NGRAM_KERNEL"
 echo "  speculation                  disabled"

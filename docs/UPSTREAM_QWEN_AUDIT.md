@@ -169,3 +169,13 @@ Only promote an open upstream change into this fork after either (a) our exact
 R0 configuration reproduces its defect, or (b) the change becomes a required
 dependency of an explicitly chosen R1 experiment. Preserve a minimal A/B for
 every such backport.
+
+### Post-coop dense/HC upstream candidates — architecture-gated
+
+After `VLLM_EXL3_COOP=1` materially changes the decode bottleneck distribution, do not blindly import newer Qwen4Exp low-latency GEMM work:
+
+- **#54560 (merged): Qwen4Exp Hopper LL-GEMM table.** The dispatch is explicitly SM90/H200 and the published TP1/TP4 shape plans were tuned on Hopper. It does not apply to CMP170HX/SM80 without an independent SM80 kernel/tuning effort.
+- **#54524 (open): FlashInfer CuTeDSL BF16 GEMM default.** Its automatic fast path is explicitly SM100a/Blackwell. It is not an SM80 solution.
+- **#54687 (merged): reuse HC combine-norm for MTP input.** This optimizes the MTP entry path; R0 production has already rejected MTP, so it is not a no-draft target.
+
+Re-profile the coop-on SM80 path first. If BF16 unquantized GEMV/GEMM becomes a leading residual cost, an SM80-specific microbenchmark/tuning effort is required rather than reusing the SM90/SM100 dispatch tables.

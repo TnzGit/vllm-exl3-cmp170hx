@@ -164,3 +164,14 @@ For a same-configuration C1 context sweep, reuse one healthy engine:
 - repeat the sentinel at the end.
 
 If the sentinel moves by more than roughly 2-3%, or an anomalous/cliff point appears, rerun the decisive cell with a fresh engine. Final boundary/anomaly claims still need fresh-engine confirmation.
+
+## no-draft decode Amdahl / coop MoE — complete
+
+- [x] server-side decode-only profiler at 4K and 160K
+- [x] routed EXL3 MoE measured at ~42% of pre-coop decode GPU time
+- [x] `VLLM_EXL3_COOP=1` actual-geometry eligibility verified
+- [x] profiler-OFF fresh-engine A/B: ~30.19 -> ~19.05 ms/output-token
+- [x] deterministic greedy parity PASS, Xid delta 0
+- [x] production profile updated to no-draft + coop MoE
+
+Next gate: **re-profile with coop enabled**. Do not select the next dense/OTHER optimization using the stale pre-coop Amdahl percentages.
