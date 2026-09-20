@@ -17,7 +17,7 @@ qualifying Qwen3.8-Flash-Next EXL3 on a single CMP170HX / SM80.
 - immutable Qwen reference: `baseline/qwen38-flash-next-94c29ba`
 - active research: `research/qwen38-flash-next-cmp170hx`
 - bring-up contract: [docs/CMP170HX_QWEN38_FLASH_NEXT.md](docs/CMP170HX_QWEN38_FLASH_NEXT.md)
-- task board: [docs/CMP170HX_QWEN38_TASKS.md](docs/CMP170HX_QWEN38_TASKS.md)
+- task board: [docs/CMP170HX_QWEN38_TASKS.md](docs/CMP170HX_QWEN38_TASKS.md)\n- vLLM upstream audit: [docs/UPSTREAM_QWEN_AUDIT.md](docs/UPSTREAM_QWEN_AUDIT.md)
 
 No CMP170HX Flash-Next throughput result is claimed until the target checkpoint
 passes the hardware qualification gates in those documents.
