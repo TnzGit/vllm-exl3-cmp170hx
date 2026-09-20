@@ -343,3 +343,48 @@ Kill or defer an experiment when:
 
 The goal is a simple, reproducible CMP170HX Flash-Next service profile, not a
 large patch count.
+
+
+## Baseline-to-current regression boundary
+
+The immutable Qwen anchor `94c29ba` is 20 commits behind the fork's initial
+research base `08ed1bf`. If current-head Qwen bring-up fails while the baseline
+works, keep vLLM, ExLlamaV3 and the model revision fixed and bisect only this
+plugin interval first. Do not respond by upgrading every runtime component at
+once.
+
+The main implementation delta is concentrated in `src/vllm_exl3/exl3.py`;
+the research base also contains later MoE work such as the cooperative decode
+path. This small, explicit interval is the first regression boundary.
+
+## Cooperative MoE qualification gate
+
+The existing `exl3_moe_coop` path is relevant to CMP170HX because upstream
+already measured it on SM80, but that result was obtained with a different
+model geometry and does not transfer automatically to Qwen.
+
+Current plugin eligibility requires all of the following:
+
+- `VLLM_EXL3_COOP=1`
+- `tokens * topk <= 256`
+- `exllamav3_ext.exl3_moe_coop` is present
+- no fat expert route for the call
+- gate/up/down use a uniform codebook-flag pair
+- hidden width divisible by 128
+- expert intermediate width divisible by 128
+
+The Qwen pack scan must establish the actual top-k, physical K/codebook and
+expert widths before enabling this path. If the model uses top-k 10, the
+current slot cap means at most 25 token rows per eligible call; treat this as a
+derived eligibility bound, not as a measured performance claim.
+
+Qualification order:
+
+1. stock path parity baseline
+2. coop kernel parity on actual Qwen shapes
+3. C1 decode A/B
+4. C2/C4 only when calls remain eligible and resident
+5. end-to-end output-token latency and throughput
+
+A kernel-level win is rejected if graph/scratch/dispatch overhead erases it
+end-to-end.
