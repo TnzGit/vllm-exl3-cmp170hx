@@ -152,6 +152,7 @@ def main() -> int:
     ap.add_argument("trace", type=Path)
     ap.add_argument("--top", type=int, default=80)
     ap.add_argument("--steps", type=float, default=None)
+    ap.add_argument("--layers", type=int, default=48)
     args = ap.parse_args()
 
     obj = _load(args.trace)
@@ -195,6 +196,14 @@ def main() -> int:
         evs.sort(key=lambda ev: float(ev.get("ts", 0.0)))
 
     total_kernel_us = sum(float(ev["dur"]) for ev in kernels)
+    coop_a_count = sum(
+        1 for ev in kernels
+        if "exl3_moe_coop_a_kernel" in _event_name(ev).lower()
+    )
+    inferred_steps: float | None = args.steps
+    if inferred_steps is None and args.layers > 0 and coop_a_count > 0:
+        inferred_steps = coop_a_count / args.layers
+
     target_kernel_us = 0.0
     mapped_us = 0.0
 
@@ -252,8 +261,10 @@ def main() -> int:
         "target_correlation_coverage="
         f"{(100.0 * mapped_us / target_kernel_us if target_kernel_us else 0.0):.2f}%"
     )
-    if args.steps is not None and args.steps > 0:
-        print(f"target_ms_per_step={target_kernel_us / args.steps / 1000:.4f}")
+    print(f"coop_a_kernel_count={coop_a_count}")
+    if inferred_steps is not None and inferred_steps > 0:
+        print(f"decode_steps={inferred_steps:.3f}")
+        print(f"target_ms_per_step={target_kernel_us / inferred_steps / 1000:.4f}")
 
     _print_rows("target raw kernels", by_kernel, target_kernel_us, args.top)
     _print_rows(
