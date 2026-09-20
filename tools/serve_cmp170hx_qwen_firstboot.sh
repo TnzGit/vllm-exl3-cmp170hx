@@ -84,6 +84,33 @@ ARGS=(
   --compilation-config "$COMPILATION_CONFIG"
 )
 
+if [[ -n "${TORCH_PROFILER_DIR:-}" ]]; then
+  mkdir -p "$TORCH_PROFILER_DIR"
+  PROFILER_CONFIG="$(
+    python - "$TORCH_PROFILER_DIR" <<'PY'
+import json
+import os
+import sys
+
+print(
+    json.dumps(
+        {
+            "profiler": "torch",
+            "torch_profiler_dir": os.path.abspath(sys.argv[1]),
+            "torch_profiler_with_stack": True,
+            "torch_profiler_record_shapes": False,
+            "torch_profiler_with_memory": False,
+            "torch_profiler_with_flops": False,
+            "torch_profiler_use_gzip": True,
+            "ignore_frontend": True,
+        }
+    )
+)
+PY
+  )"
+  ARGS+=(--profiler-config "$PROFILER_CONFIG")
+fi
+
 echo "[runtime]"
 printf '  %-28s %s\n' \
   "MODEL_DIR" "$MODEL_DIR" \
@@ -103,6 +130,7 @@ echo "  speculation                  disabled"
 echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
 echo "  CUDA graph mode              PIECEWISE"
+echo "  torch profiler               ${TORCH_PROFILER_DIR:-disabled}"
 
 echo "[exec] vllm ${ARGS[*]}"
 exec vllm "${ARGS[@]}"
