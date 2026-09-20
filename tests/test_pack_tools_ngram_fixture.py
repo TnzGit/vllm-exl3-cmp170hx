@@ -257,3 +257,21 @@ def test_cmp170hx_manifest_uses_headers_when_source_bits_is_fractional(tmp_path)
 
     assert open(cfg_path, "rb").read() == before
     assert not os.path.exists(cfg_path + ".native")
+
+def test_config_tool_rewrites_fractional_source_bits_from_tensor_headers(tmp_path):
+    pack = _pack(tmp_path, unsharded=True)
+    cfg_path = os.path.join(pack, "config.json")
+    cfg = json.load(open(cfg_path))
+    cfg["text_config"]["quantization_config"]["bits"] = 3.05
+    json.dump(cfg, open(cfg_path, "w"), indent=2)
+
+    _scan(pack)
+    r = _run(_CONFIG, pack)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rewritten = json.load(open(cfg_path))["text_config"]["quantization_config"]
+
+    # Physical K comes from safetensors header geometry, not the fractional
+    # average bpw stored by the source pack.
+    assert rewritten["bits"] == 3
+    assert rewritten["native_quantization_config"]["bits"] == 3.05
+    assert rewritten["ngram_embedding"]["bits"] == 3
