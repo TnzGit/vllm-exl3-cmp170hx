@@ -164,3 +164,13 @@ For a same-configuration C1 context sweep, reuse one healthy engine:
 - repeat the sentinel at the end.
 
 If the sentinel moves by more than roughly 2-3%, or an anomalous/cliff point appears, rerun the decisive cell with a fresh engine. Final boundary/anomaly claims still need fresh-engine confirmation.
+
+## MTP qualification — complete
+
+- [x] hidden buffer landed on `cuda:0`; no #56742 backport required
+- [x] k=1 / k=2 / k=3 measured at short and mid context
+- [x] best MTP setting is k=1, but it is still ~21-25% slower than no-draft
+- [x] long-context acceptance cliff did not reproduce through 204,525 prompt tokens
+- [x] production decision: **MTP OFF / no-draft only**
+
+Next gate: profile the no-draft path before choosing MoE, disk n-gram, QSA or GDN optimization work.
