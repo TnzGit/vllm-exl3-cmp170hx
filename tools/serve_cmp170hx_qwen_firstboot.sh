@@ -44,8 +44,15 @@ export VLLM_EXL3_GC_AFTER_MOE_LAYER="${VLLM_EXL3_GC_AFTER_MOE_LAYER:-0}"
 export VLLM_EXL3_NGRAM_TABLE=disk
 export VLLM_EXL3_NGRAM_KERNEL="${VLLM_EXL3_NGRAM_KERNEL:-ext}"
 
-echo "[preflight]"
-python "$ROOT/tools/cmp170hx_qwen_preflight.py" --profile text-no-draft
+NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-0}"
+if [[ "$NUM_SPEC_TOKENS" == "0" ]]; then
+  PREFLIGHT_PROFILE="text-no-draft"
+else
+  PREFLIGHT_PROFILE="text-mtp"
+fi
+
+echo "[preflight] profile=$PREFLIGHT_PROFILE"
+python "$ROOT/tools/cmp170hx_qwen_preflight.py" --profile "$PREFLIGHT_PROFILE"
 
 SPLIT_OPS="$(
   python - <<'PY'
@@ -87,7 +94,6 @@ ARGS=(
 # NUM_SPEC_TOKENS=0 keeps the no-draft profile; any other value enables the
 # Qwen4Exp MTP draft. Prefix caching stays off for the whole MTP baseline so
 # the open hybrid/MTP cache-annotation issues are not a confound.
-NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-0}"
 if [[ "$NUM_SPEC_TOKENS" != "0" ]]; then
   ARGS+=(--speculative-config "{\"method\":\"qwen4_exp_mtp\",\"num_speculative_tokens\":${NUM_SPEC_TOKENS}}")
 fi
