@@ -92,3 +92,36 @@ def test_variant_matrix_keeps_current_ampere_dispatch_as_control():
     assert mod.VARIANTS["int8_k4_cap"]["EXL3_INT8_GEMV_MAX_K"] == "4"
     assert mod.VARIANTS["fp16_force_shuffle"]["EXL3_GEMV_SMEM"] == "0"
     assert mod.VARIANTS["fp16_force_smem"]["EXL3_GEMV_SMEM"] == "1"
+
+
+def test_k4_projection_gate_uses_post_coop_calibration(capsys):
+    mod = _load_module()
+    results = []
+    for family, current, candidate in (
+        ("linear_attn.in_proj_qkv", 10.0, 7.0),
+        ("linear_attn.in_proj_z", 20.0, 14.0),
+        ("linear_attn.out_proj", 30.0, 21.0),
+    ):
+        results.append(
+            {
+                "base": "language_model.layers.0." + family,
+                "k": 4,
+                "variant": "current",
+                "median_us": current,
+            }
+        )
+        results.append(
+            {
+                "base": "language_model.layers.0." + family,
+                "k": 4,
+                "variant": "fp16_force_smem",
+                "median_us": candidate,
+            }
+        )
+
+    mod._print_k4_projection(results, 19.053, 3.659)
+    out = capsys.readouterr().out
+    assert "fp16_force_smem" in out
+    assert "PASS" in out
+    # 30% of 3.659 ms is about 1.098 ms = 5.76% of 19.053 ms.
+    assert "5.76" in out
