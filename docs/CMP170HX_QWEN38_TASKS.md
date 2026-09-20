@@ -4,6 +4,16 @@ Primary plan: `docs/CMP170HX_QWEN38_FLASH_NEXT.md`.
 
 Before changing the vLLM runtime, review `docs/UPSTREAM_QWEN_AUDIT.md`.
 
+## CPU gate before touching GPU
+
+- [ ] `python -m py_compile tools/apply_qwen4_exp_patches.py tools/cmp170hx_qwen_preflight.py tools/cmp170hx_qwen_pack_manifest.py`
+- [ ] `python -m pytest -q tests/test_qwen4_exp_patch_script.py tests/test_qwen4_exp_patch_stack.py tests/test_cmp170hx_qwen_preflight.py tests/test_pack_tools_ngram_fixture.py`
+- [ ] Run the full CPU-capable repository test suite if dependencies are available.
+- [ ] If any test fails, fix the scaffold first; do not compensate in the serve command.
+
+GitHub Actions has not produced a run for this fork/PR yet, so local CPU validation is a hard
+bring-up gate rather than an assumed CI result.
+
 ## Runtime identity
 
 - [ ] Record exact vLLM artifact/version.
