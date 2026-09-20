@@ -440,3 +440,18 @@ end-to-end.
 Fresh-engine isolation is a correctness tool, not a requirement to reload the model for every prompt length. Within an unchanged runtime configuration, context-only sweeps may reuse one engine if a short-context sentinel is measured before and after the sweep and scheduler/GPU state is clean between requests.
 
 Always restart after a runtime/configuration change, crash/OOM/Xid, or when confirming a capacity/acceptance/performance cliff.
+
+## R0 MTP qualification result
+
+Hardware qualification on one CMP170HX found no production win from Qwen4Exp MTP.
+
+- no-draft: ~30.1 ms/output-token / ~33.2 tok/s
+- k=1: ~37.5-38.4 ms/output-token / ~26.1-26.7 tok/s
+- k=2: ~45.2 ms/output-token / ~22.1 tok/s
+- k=3: ~53.9-54.4 ms/output-token / ~18.4-18.6 tok/s
+
+Acceptance is high rather than poor: k=1 rises from ~0.90 accepted/pass at 4K to ~0.98-1.00 at long context. The previously reported ~163,840-token acceptance cliff did not reproduce through 204,525 prompt tokens.
+
+Conclusion: **the R0 production profile is no-draft across the measured context envelope.** Do not spend further optimization time on MTP unless a later runtime materially changes draft cost.
+
+Full evidence: `docs/R0_MTP_QUALIFY.md`.
