@@ -482,6 +482,7 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=2000)
     ap.add_argument("--repeat", type=int, default=5)
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--output-json", type=Path, default=None)
 
     # Internal child-only args.
     ap.add_argument("--child-base", default=None)
@@ -542,7 +543,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # Add after parser construction without importing torch in the parent.
-    # argparse does not allow a post-hoc option, so patch main's parser source
-    # through this tiny argv normalization: --output-json is parsed below.
     raise SystemExit(main())
