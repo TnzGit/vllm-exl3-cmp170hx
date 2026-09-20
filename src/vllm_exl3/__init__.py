@@ -160,6 +160,17 @@ def runtime_diagnostics():
             "until CUDA-graph qualification is completed."
         ),
     }
+    record["trellis_load"] = {
+        "model_dir": exl3.os.environ.get("VLLM_EXL3_MODEL_DIR"),
+        "arena_enabled": exl3._exl3_trellis_arena_enabled(),
+        "arena_prescan": exl3.os.environ.get("VLLM_EXL3_ARENA_PRESCAN", "1") != "0",
+        "direct_fill_stats": exl3.direct_fill_stats(),
+        "note": (
+            "For a prepared local pack, direct-fill is expected to dominate routed "
+            "trellis loading. A large fallback count means arena prescan did not "
+            "produce a complete plan."
+        ),
+    }
     record["tp_geometry"] = {
         "nested_moe_config_compat_installed": bool(
             getattr(exl3, "_vllm_exl3_tp_geometry_compat_installed", False)

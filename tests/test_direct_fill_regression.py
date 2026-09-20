@@ -443,3 +443,27 @@ class TestDirectFillIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBlockingWeightCopy(unittest.TestCase):
+    def setUp(self):
+        if not _TORCH_AVAILABLE or torch is None:
+            self.skipTest("torch required")
+
+    def test_copy_preserves_content_without_stream_sync(self):
+        import vllm_exl3.exl3 as exl3
+
+        src = torch.arange(64, dtype=torch.float16)
+        dest = torch.empty_like(src)
+
+        class _Stream:
+            def synchronize(self):
+                raise AssertionError("loader must not perform a stream-wide synchronize")
+
+        with patch.object(torch.cuda, "current_stream", return_value=_Stream()), patch.object(
+            exl3, "_madv_dontneed_cpu_tensor", return_value=False
+        ) as madv:
+            exl3._copy_weight_blocking(dest, src)
+
+        self.assertTrue(torch.equal(dest, src))
+        madv.assert_called_once_with(src)

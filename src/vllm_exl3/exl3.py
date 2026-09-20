@@ -568,17 +568,89 @@ def _proj_from_shard_id(shard_id: str) -> str:
     raise ValueError(f"unknown EXL3 shard_id={shard_id}")
 
 
+_TRELLIS_INDEX_CACHE: dict[
+    tuple[str, int, int],
+    dict[tuple[bool, int, int, str], tuple[str, str]],
+] = {}
+
+
+def _trellis_index_from_checkpoint(
+    index_path: str,
+) -> dict[tuple[bool, int, int, str], tuple[str, str]]:
+    """Return source trellis key/shard by (is_mtp, layer, expert, projection).
+
+    The safetensors index is large for Qwen/DeepSeek EXL3 packs. Parse it once
+    per process and keep only routed-expert trellis entries. Projection aliases
+    cover both w1/w3/w2 source names and gate/up/down_proj source names.
+
+    The cache identity includes index mtime+size so an in-place prepared-pack
+    rewrite cannot silently reuse stale metadata.
+    """
+    st = os.stat(index_path)
+    real = os.path.realpath(index_path)
+    cache_key = (real, int(st.st_mtime_ns), int(st.st_size))
+    cached = _TRELLIS_INDEX_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    with open(index_path, encoding="utf-8") as fh:
+        weight_map = json.load(fh).get("weight_map", {})
+    if not isinstance(weight_map, dict):
+        raise ValueError("invalid safetensors index weight_map")
+
+    layer_re = re.compile(r"(?:^|\.)layers\.(\d+)\.")
+    expert_re = re.compile(r"\.experts\.(\d+)\.([^.]+)\.trellis$")
+    aliases = {
+        "w1": "gate",
+        "gate_proj": "gate",
+        "w3": "up",
+        "up_proj": "up",
+        "w2": "down",
+        "down_proj": "down",
+    }
+    out: dict[tuple[bool, int, int, str], tuple[str, str]] = {}
+    ambiguous: set[tuple[bool, int, int, str]] = set()
+    for raw_key, raw_shard in weight_map.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_shard, str):
+            continue
+        if not raw_key.endswith(".trellis") or ".experts." not in raw_key:
+            continue
+        lm = layer_re.search(raw_key)
+        em = expert_re.search(raw_key)
+        if lm is None or em is None:
+            continue
+        proj = aliases.get(em.group(2))
+        if proj is None:
+            continue
+        is_mtp = raw_key.startswith("mtp.") or ".mtp." in raw_key
+        ident = (is_mtp, int(lm.group(1)), int(em.group(1)), proj)
+        value = (raw_key, raw_shard)
+        prior = out.get(ident)
+        if prior is not None and prior != value:
+            ambiguous.add(ident)
+        else:
+            out[ident] = value
+
+    for ident in ambiguous:
+        out.pop(ident, None)
+
+    for key in list(_TRELLIS_INDEX_CACHE):
+        if key[0] == real and key != cache_key:
+            _TRELLIS_INDEX_CACHE.pop(key, None)
+    _TRELLIS_INDEX_CACHE[cache_key] = out
+    return out
+
+
 def _try_prescan_trellis_shapes(
     layer: Any,
     num_experts: int,
 ) -> dict[str, dict[int, tuple[int, ...]]] | None:
-    """Header-only shape scan from the on-disk checkpoint (no tensor materialize).
+    """Header-only shape scan from the on-disk checkpoint.
 
-    Uses ``VLLM_ENGRAM_MODEL_DIR`` / ``VLLM_EXL3_MODEL_DIR`` and the layer's
-    ``layer_name``/``prefix`` to locate ``layers.N.ffn.experts.*`` trellis keys.
-    Local expert ids map linearly onto a global contiguous block when
-    ``layer.starting_expert_offset`` / EP metadata is present; otherwise assume
-    local id == global id (offline tests).
+    Uses VLLM_ENGRAM_MODEL_DIR / VLLM_EXL3_MODEL_DIR and a cached safetensors
+    index. Without an authoritative metadata provider, requested keys are
+    grouped by shard so each shard header is opened once per layer rather than
+    once per expert tensor.
     """
     model_dir = os.environ.get("VLLM_ENGRAM_MODEL_DIR") or os.environ.get(
         "VLLM_EXL3_MODEL_DIR"
@@ -593,65 +665,100 @@ def _try_prescan_trellis_shapes(
     if not os.path.isfile(index_path):
         return None
     try:
-        with open(index_path, encoding="utf-8") as fh:
-            weight_map = json.load(fh).get("weight_map", {})
+        key_index = _trellis_index_from_checkpoint(index_path)
     except Exception:
         return None
+
     layer_name = str(
         getattr(layer, "layer_name", None)
         or getattr(layer, "prefix", None)
         or ""
     )
-    # Expect ...layers.N.ffn.experts or layers.N
-    import re as _re
-
-    m = _re.search(r"layers\.(\d+)", layer_name)
+    m = re.search(r"layers\.(\d+)", layer_name)
     if not m:
         return None
     layer_id = int(m.group(1))
+    is_mtp = layer_name.startswith("mtp.") or ".mtp." in layer_name
+
+    # vLLM numbers Qwen MTP runtime layers after the main stack, while the
+    # checkpoint stores them under mtp.layers.0..N. Infer the main-stack size
+    # from the source index and translate only when an exact MTP layer id is
+    # absent. Main-model layer ids remain unchanged.
+    source_layer_id = layer_id
+    if is_mtp and not any(
+        ident[0] and ident[1] == source_layer_id for ident in key_index
+    ):
+        main_layer_ids = {ident[1] for ident in key_index if not ident[0]}
+        if main_layer_ids:
+            candidate = layer_id - (max(main_layer_ids) + 1)
+            if candidate >= 0 and any(
+                ident[0] and ident[1] == candidate for ident in key_index
+            ):
+                source_layer_id = candidate
+
     offset = int(
         getattr(layer, "starting_expert_offset", None)
         or getattr(layer, "expert_id_offset", None)
         or 0
     )
-    # EP linear placement: local e <-> global offset+e
-    prefix = f"layers.{layer_id}.ffn.experts."
+
     shapes: dict[str, dict[int, tuple[int, ...]]] = {
         "gate": {},
         "up": {},
         "down": {},
     }
-    proj_map = {"w1": "gate", "w3": "up", "w2": "down"}
-    # Gather keys per local expert.
+    requested_by_shard: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
+    from .tensor_metadata import current_tensor_metadata_provider
+
+    provider = current_tensor_metadata_provider()
+    t0 = time.perf_counter()
     for local_e in range(int(num_experts)):
         global_e = offset + local_e
-        for wp, proj in proj_map.items():
-            key = f"{prefix}{global_e}.{wp}.trellis"
-            shard = weight_map.get(key)
-            if shard is None:
-                return None  # incomplete map; fall back to stage-pack
+        for proj in ("gate", "up", "down"):
+            entry = key_index.get((is_mtp, source_layer_id, global_e, proj))
+            if entry is None:
+                return None
+            key, shard = entry
             path = os.path.join(model_dir, shard)
-            from .tensor_metadata import current_tensor_metadata_provider
-            provider = current_tensor_metadata_provider()
             if provider is not None:
-                # Authoritative metadata is supplied before construction by the
-                # selected loader. Failure must propagate, never silently stage.
                 desc = provider(path, key)
                 shape = tuple(desc.shape)
-                if (desc.dtype != "I16" or len(shape) != 3
-                        or any(type(x) is not int or x <= 0 for x in shape)
-                        or shape[-1] % 16 or not 2 <= shape[-1] // 16 <= 8
-                        or math.prod(shape) * 2 != desc.nbytes):
+                if (
+                    desc.dtype != "I16"
+                    or len(shape) != 3
+                    or any(type(x) is not int or x <= 0 for x in shape)
+                    or shape[-1] % 16
+                    or not 2 <= shape[-1] // 16 <= 8
+                    or math.prod(shape) * 2 != desc.nbytes
+                ):
                     raise ValueError("invalid EXL3 planned tensor metadata: " + key)
+                shapes[proj][local_e] = shape
             else:
-                try:
-                    with safe_open(path, framework="pt") as f:
-                        shape = tuple(int(x) for x in f.get_slice(key).get_shape())
-                except Exception:
-                    return None
-            shapes[proj][local_e] = shape
-    return shapes
+                requested_by_shard[shard].append((key, proj, local_e))
 
+    if provider is None:
+        try:
+            for shard, requests in requested_by_shard.items():
+                path = os.path.join(model_dir, shard)
+                with safe_open(path, framework="pt") as sf:
+                    for key, proj, local_e in requests:
+                        shape = tuple(int(x) for x in sf.get_slice(key).get_shape())
+                        shapes[proj][local_e] = shape
+        except Exception:
+            return None
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    logger.info(
+        "EXL3 trellis PRESCAN ready layer=%s experts=%s tensors=%s shards=%s "
+        "provider=%s elapsed_ms=%.1f",
+        layer_name or layer_id,
+        num_experts,
+        int(num_experts) * 3,
+        len(requested_by_shard) if provider is None else 0,
+        "yes" if provider is not None else "no",
+        elapsed_ms,
+    )
+    return shapes
 
 def _uva_trellis_placement_requested(layer: Any) -> bool:
     """True when the packed routed-expert payload must live in pinned host memory.
@@ -869,6 +976,19 @@ def _madv_dontneed_cpu_tensor(src: "torch.Tensor") -> bool:
         return False
     return False
 
+
+
+
+def _copy_weight_blocking(dest: "torch.Tensor", src: "torch.Tensor") -> None:
+    """Copy a loaded tensor without an extra CUDA stream-wide synchronize.
+
+    CPU->CUDA copy_ with non_blocking=False already preserves the source
+    lifetime. An explicit current_stream().synchronize() after every small
+    suh/svh or dense EXL3 copy only serializes the loader. File-backed CPU
+    pages are reclaimed after the blocking copy returns.
+    """
+    dest.copy_(src, non_blocking=False)
+    _madv_dontneed_cpu_tensor(src)
 
 
 def _direct_fill_trellis_slot(
@@ -2865,14 +2985,24 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 _fb = int(sharded.numel()) * int(sharded.element_size())
                 _DIRECT_FILL_STATS["DIRECT_FILL_FALLBACK_CALLS"] += 1
                 _DIRECT_FILL_STATS["DIRECT_FILL_FALLBACK_BYTES"] += _fb
-                logger.warning(
-                    "EXL3 trellis staging fallback (no arena plan) layer=%s "
-                    "proj=%s expert=%s — host Anon coexistence risk on UMA",
-                    getattr(owner_mod, "layer_name", None)
-                    or getattr(owner_mod, "prefix", "?"),
-                    proj,
-                    expert_id,
+                _fallback_calls = int(
+                    _DIRECT_FILL_STATS["DIRECT_FILL_FALLBACK_CALLS"]
                 )
+                if _fallback_calls <= 3:
+                    logger.warning(
+                        "EXL3 trellis staging fallback (no arena plan) layer=%s "
+                        "proj=%s expert=%s — host staging enabled",
+                        getattr(owner_mod, "layer_name", None)
+                        or getattr(owner_mod, "prefix", "?"),
+                        proj,
+                        expert_id,
+                    )
+                elif _fallback_calls == 4:
+                    logger.warning(
+                        "EXL3 trellis staging fallback: suppressing further "
+                        "per-tensor warnings; layer summaries and "
+                        "direct_fill_stats() retain counts/bytes"
+                    )
                 if _exl3_mem_waterfall_enabled():
                     _exl3_mem_snapshot("AFTER_DEST_ALLOC", owner_mod)
                 staged = sharded.detach()
@@ -2950,13 +3080,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 f"expert={expert_id}: dest {tuple(dest.shape)} != "
                 f"loaded {tuple(sharded.shape)}"
             )
-        dest.copy_(sharded)
-        if dest.device.type == "cuda" and torch is not None:
-            try:
-                torch.cuda.current_stream().synchronize()
-            except Exception:
-                pass
-        _madv_dontneed_cpu_tensor(sharded)
+        _copy_weight_blocking(dest, sharded)
         del loaded, sharded, loaded_weight
         return True if return_success else None
 
@@ -2980,6 +3104,23 @@ class Exl3MoEMethod(FusedMoEMethodBase):
         staged_n = sum(len(m) for m in staging.values() if isinstance(m, dict))
         has_plan = getattr(layer, "_exl3_trellis_arena_plan", None) is not None
         if _exl3_trellis_arena_enabled() and (staged_n > 0 or has_plan):
+            if staged_n > 0 and not has_plan:
+                staged_bytes = sum(
+                    int(t.numel()) * int(t.element_size())
+                    for proj_map in staging.values()
+                    if isinstance(proj_map, dict)
+                    for t in proj_map.values()
+                    if t is not None
+                )
+                logger.warning(
+                    "EXL3 trellis staging fallback summary layer=%s tensors=%s "
+                    "bytes=%s; set VLLM_EXL3_MODEL_DIR to a prepared pack and "
+                    "keep VLLM_EXL3_ARENA_PRESCAN=1 to enable direct fill",
+                    getattr(layer, "layer_name", None)
+                    or getattr(layer, "prefix", "?"),
+                    staged_n,
+                    staged_bytes,
+                )
             if _exl3_mem_waterfall_enabled():
                 _exl3_mem_snapshot("BEFORE_ARENA_PACK", layer)
             alloc_before = int(getattr(layer, "_exl3_trellis_alloc_count_before", 0))
@@ -2992,8 +3133,9 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 _exl3_mem_snapshot("AFTER_GC", layer)
             if not self._logged:
                 logger.info(
-                    "EXL3 trellis arenas: before_allocs=%s after_arenas=%s "
-                    "final_bytes=%s temp_peak_bytes=%s",
+                    "EXL3 trellis arenas: mode=%s before_allocs=%s "
+                    "after_arenas=%s final_bytes=%s temp_peak_bytes=%s",
+                    stats.get("mode"),
                     stats.get("allocations_before"),
                     stats.get("allocations_after"),
                     stats.get("final_bytes"),
@@ -4184,13 +4326,7 @@ class Exl3LinearMethod(LinearMethodBase):
                     f"suffix={suffix}: dest {tuple(dest.shape)} != "
                     f"loaded {tuple(sharded.shape)}"
                 )
-            dest.copy_(sharded)
-            if dest.device.type == "cuda" and torch is not None:
-                try:
-                    torch.cuda.current_stream().synchronize()
-                except Exception:
-                    pass
-            _madv_dontneed_cpu_tensor(sharded)
+            _copy_weight_blocking(dest, sharded)
 
         return weight_loader
 

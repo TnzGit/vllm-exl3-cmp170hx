@@ -434,3 +434,9 @@ Qualification order:
 
 A kernel-level win is rejected if graph/scratch/dispatch overhead erases it
 end-to-end.
+
+### Engine reuse for same-configuration sweeps
+
+Fresh-engine isolation is a correctness tool, not a requirement to reload the model for every prompt length. Within an unchanged runtime configuration, context-only sweeps may reuse one engine if a short-context sentinel is measured before and after the sweep and scheduler/GPU state is clean between requests.
+
+Always restart after a runtime/configuration change, crash/OOM/Xid, or when confirming a capacity/acceptance/performance cliff.

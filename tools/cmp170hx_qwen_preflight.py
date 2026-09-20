@@ -321,6 +321,9 @@ def main() -> int:
             {
                 key: os.environ.get(key)
                 for key in (
+                    "VLLM_EXL3_MODEL_DIR",
+                    "VLLM_EXL3_TRELLIS_ARENA",
+                    "VLLM_EXL3_ARENA_PRESCAN",
                     "VLLM_EXL3_NGRAM_TABLE",
                     "VLLM_EXL3_NGRAM_KERNEL",
                     "VLLM_EXL3_COOP",
