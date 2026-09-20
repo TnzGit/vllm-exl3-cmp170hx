@@ -28,7 +28,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import json
 import os
@@ -161,7 +160,12 @@ def catalog(model_dir: Path) -> list[TensorFamily]:
         if not key.endswith(".trellis"):
             continue
         base = key[: -len(".trellis")]
-        if ".experts." in base or "ngram" in base.lower():
+        if (
+            ".experts." in base
+            or "ngram" in base.lower()
+            or ".mtp." in base
+            or base.startswith("mtp.")
+        ):
             continue
         meta = headers[shard].get(key) or {}
         shape = meta.get("shape")
@@ -280,7 +284,7 @@ def child_main(args: argparse.Namespace) -> int:
     svh = svh.to(device, non_blocking=False)
 
     # Import extension only after env has been fixed for this child process.
-    from exllamav3.ext import exllamav3_ext as ext
+    import exllamav3_ext as ext
 
     gen = torch.Generator(device=device)
     gen.manual_seed(args.seed)
@@ -372,6 +376,8 @@ def child_main(args: argparse.Namespace) -> int:
         },
         "warmup": args.warmup,
         "iters": args.iters,
+        "graph_calls": args.graph_calls,
+        "logical_calls_per_sample": logical_calls,
         "repeat": args.repeat,
         "samples_us": us_per_call,
         "median_us": median_us,
@@ -413,6 +419,8 @@ def _run_child(
         str(args.iters),
         "--repeat",
         str(args.repeat),
+        "--graph-calls",
+        str(args.graph_calls),
         "--seed",
         str(args.seed),
     ]
@@ -492,7 +500,8 @@ def main() -> int:
     )
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--warmup", type=int, default=200)
-    ap.add_argument("--iters", type=int, default=2000)
+    ap.add_argument("--iters", type=int, default=500)
+    ap.add_argument("--graph-calls", type=int, default=16)
     ap.add_argument("--repeat", type=int, default=5)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--output-json", type=Path, default=None)
