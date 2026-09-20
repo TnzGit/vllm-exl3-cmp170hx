@@ -119,7 +119,7 @@ First boot target:
 - C1
 - 4K runtime length or another deliberately small first-boot context
 - no speculation
-- `VLLLM_EXL3_NGRAM_TABLE=disk`
+- `VLLM_EXL3_NGRAM_TABLE=disk`
 - PIECEWISE graphs with the n-gram out-variant split
 - exact worker-side runtime diagnostics captured
 
