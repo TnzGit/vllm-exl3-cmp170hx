@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import argparse
 import json
 import os
 import platform
@@ -64,7 +65,7 @@ def _block_has(
     return all(token in block for token in required)
 
 
-def check_vllm_patches(vllm_dir: Path) -> list[Check]:
+def check_vllm_patches(vllm_dir: Path, profile: str) -> list[Check]:
     root = vllm_dir / "models" / "qwen4_exp" / "nvidia"
     model = root / "model.py"
     ple = root / "ple_layer.py"
@@ -107,32 +108,45 @@ def check_vllm_patches(vllm_dir: Path) -> list[Check]:
             ),
         ),
         Check(
-            "PASS"
-            if _block_has(
-                mtp_src,
-                "self.lm_head = ParallelLMHead(",
-                ("quant_config=self.quant_config",),
-                span=1200,
+            (
+                "PASS"
+                if _block_has(
+                    mtp_src,
+                    "self.lm_head = ParallelLMHead(",
+                    ("quant_config=self.quant_config",),
+                    span=1200,
+                )
+                else "FAIL"
             )
-            else "FAIL",
+            if profile.endswith("-mtp")
+            else "SKIP",
             "MTP lm_head quant",
-            "MTP ParallelLMHead must receive quant_config=self.quant_config",
+            (
+                "required for MTP profiles"
+                if profile.endswith("-mtp")
+                else "not required for no-draft profile"
+            ),
         ),
         Check(
-            "PASS"
-            if all(
-                token in model_src
-                for token in (
-                    '.attn.q_proj.": None',
-                    '.attn.k_proj.": None',
-                    '.attn.v_proj.": None',
+            (
+                "PASS"
+                if all(
+                    token in model_src
+                    for token in (
+                        '.attn.q_proj.": None',
+                        '.attn.k_proj.": None',
+                        '.attn.v_proj.": None',
+                    )
                 )
+                else "FAIL"
             )
-            else "WARN",
+            if profile.startswith("multimodal-")
+            else "SKIP",
             "vision split qkv",
             (
-                "native EXL3 Qwen packs may include split vision q/k/v next to "
-                "the fused bf16 qkv; apply the model patch if the pack contains them"
+                "required for multimodal profiles"
+                if profile.startswith("multimodal-")
+                else "not required for language-model-only profile"
             ),
         ),
     ]
@@ -218,7 +232,22 @@ def exllamav3_check() -> Check:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--profile",
+        choices=(
+            "text-no-draft",
+            "text-mtp",
+            "multimodal-no-draft",
+            "multimodal-mtp",
+        ),
+        default="text-no-draft",
+    )
+    args = ap.parse_args()
+    profile = args.profile
+
     print("CMP170HX Qwen3.8-Flash-Next EXL3 preflight")
+    print(f"profile={profile}")
     print(f"python={sys.version.split()[0]} platform={platform.platform()}")
     print(
         "packages="
@@ -246,7 +275,7 @@ def main() -> int:
                 f"path={vllm_dir}; version={_version('vllm')}",
             )
         )
-        checks.extend(check_vllm_patches(vllm_dir))
+        checks.extend(check_vllm_patches(vllm_dir, profile))
 
     plugin_check, diag = plugin_diagnostics()
     checks.append(plugin_check)
