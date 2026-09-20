@@ -961,6 +961,19 @@ def _madv_dontneed_cpu_tensor(src: "torch.Tensor") -> bool:
 
 
 
+
+def _copy_weight_blocking(dest: "torch.Tensor", src: "torch.Tensor") -> None:
+    """Copy a loaded tensor without an extra CUDA stream-wide synchronize.
+
+    CPU->CUDA copy_ with non_blocking=False already preserves the source
+    lifetime. An explicit current_stream().synchronize() after every small
+    suh/svh or dense EXL3 copy only serializes the loader. File-backed CPU
+    pages are reclaimed after the blocking copy returns.
+    """
+    dest.copy_(src, non_blocking=False)
+    _madv_dontneed_cpu_tensor(src)
+
+
 def _direct_fill_trellis_slot(
     layer: Any,
     proj: str,
@@ -3050,13 +3063,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 f"expert={expert_id}: dest {tuple(dest.shape)} != "
                 f"loaded {tuple(sharded.shape)}"
             )
-        dest.copy_(sharded)
-        if dest.device.type == "cuda" and torch is not None:
-            try:
-                torch.cuda.current_stream().synchronize()
-            except Exception:
-                pass
-        _madv_dontneed_cpu_tensor(sharded)
+        _copy_weight_blocking(dest, sharded)
         del loaded, sharded, loaded_weight
         return True if return_success else None
 
@@ -4301,13 +4308,7 @@ class Exl3LinearMethod(LinearMethodBase):
                     f"suffix={suffix}: dest {tuple(dest.shape)} != "
                     f"loaded {tuple(sharded.shape)}"
                 )
-            dest.copy_(sharded)
-            if dest.device.type == "cuda" and torch is not None:
-                try:
-                    torch.cuda.current_stream().synchronize()
-                except Exception:
-                    pass
-            _madv_dontneed_cpu_tensor(sharded)
+            _copy_weight_blocking(dest, sharded)
 
         return weight_loader
 
