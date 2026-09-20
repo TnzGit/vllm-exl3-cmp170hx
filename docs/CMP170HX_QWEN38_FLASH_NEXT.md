@@ -440,3 +440,20 @@ end-to-end.
 Fresh-engine isolation is a correctness tool, not a requirement to reload the model for every prompt length. Within an unchanged runtime configuration, context-only sweeps may reuse one engine if a short-context sentinel is measured before and after the sweep and scheduler/GPU state is clean between requests.
 
 Always restart after a runtime/configuration change, crash/OOM/Xid, or when confirming a capacity/acceptance/performance cliff.
+
+## R0 no-draft decode optimization result
+
+Server-side GPU profiling on one CMP170HX found routed EXL3 MoE at ~42% of decode GPU kernel time. The existing `VLLM_EXL3_COOP=1` path is eligible for the actual Qwen geometry (topk=10, hidden=2560, intermediate=640, C1 decode).
+
+Fresh-engine profiler-OFF A/B:
+
+- stock: 30.188 ms/output-token / 33.126 tok/s at 4K
+- coop: 19.053 ms/output-token / 52.484 tok/s at 4K
+- 160K: 30.144 -> 19.037 ms/output-token
+- gain: ~36.9% lower latency / ~58.4% higher throughput
+- deterministic greedy parity PASS
+- Xid delta 0
+
+Production decision: **no-draft + `VLLM_EXL3_COOP=1`**. This is context-independent across the measured short/long contexts.
+
+After this win the old pre-coop Amdahl shares are stale. Re-profile the coop-on production path before choosing dense EXL3 or OTHER as the next optimization target.
