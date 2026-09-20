@@ -88,6 +88,14 @@ ARGS=(
   --compilation-config "$COMPILATION_CONFIG"
 )
 
+# NUM_SPEC_TOKENS=0 keeps the no-draft profile; any other value enables the
+# Qwen4Exp MTP draft. Requires the text-mtp patch stack. Prefix caching stays
+# off for every MTP cell so the open hybrid/MTP cache issues are not a confound.
+NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-0}"
+if [[ "$NUM_SPEC_TOKENS" != "0" ]]; then
+  ARGS+=(--speculative-config "{\"method\":\"qwen4_exp_mtp\",\"num_speculative_tokens\":${NUM_SPEC_TOKENS}}")
+fi
+
 echo "[runtime]"
 printf '  %-28s %s\n' \
   "MODEL_DIR" "$MODEL_DIR" \
@@ -95,6 +103,7 @@ printf '  %-28s %s\n' \
   "MAX_MODEL_LEN" "$MAX_MODEL_LEN" \
   "MAX_NUM_SEQS" "$MAX_NUM_SEQS" \
   "PORT" "$PORT" \
+  "NUM_SPEC_TOKENS" "$NUM_SPEC_TOKENS" \
   "VLLM_EXL3_MODEL_DIR" "$VLLM_EXL3_MODEL_DIR" \
   "VLLM_EXL3_TRELLIS_ARENA" "$VLLM_EXL3_TRELLIS_ARENA" \
   "VLLM_EXL3_ARENA_PRESCAN" "$VLLM_EXL3_ARENA_PRESCAN" \
@@ -104,7 +113,7 @@ printf '  %-28s %s\n' \
   "VLLM_EXL3_COOP" "$VLLM_EXL3_COOP" \
   "VLLM_EXL3_NGRAM_TABLE" "$VLLM_EXL3_NGRAM_TABLE" \
   "VLLM_EXL3_NGRAM_KERNEL" "$VLLM_EXL3_NGRAM_KERNEL"
-echo "  speculation                  disabled"
+echo "  speculation                  ${NUM_SPEC_TOKENS} draft token(s) (0 = disabled)"
 echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
 echo "  CUDA graph mode              PIECEWISE"
