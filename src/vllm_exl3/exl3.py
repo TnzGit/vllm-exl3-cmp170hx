@@ -2577,7 +2577,16 @@ def _exl3_routed_experts_loader(layer: torch.nn.Module):
 
     Mirrors vLLM's ``RoutedExperts.load_weights`` name resolution but never takes its
     fused (3-D) branch: an EXL3 checkpoint always stores one tensor per expert.
+
+    EXL3 stores several payloads (trellis/suh/svh/codebook marker) under the
+    same expert projection base name. The first payload still performs vLLM's
+    original ordered substring scan; later payloads memoize that successful
+    candidate. This preserves first-match semantics while avoiding repeated
+    scans over the same expert/projection mapping.
     """
+
+    match_cache: dict[str, tuple[str, str, int, str]] = {}
+    cache_enabled = os.environ.get("VLLM_EXL3_EXPERT_MATCH_CACHE", "1") != "0"
 
     def load_weights(weights):
         try:
@@ -2587,30 +2596,43 @@ def _exl3_routed_experts_loader(layer: torch.nn.Module):
         layer_name = str(getattr(layer, "layer_name", ""))
         for expert_name, loaded_weight in weights:
             qual_name = f"{layer_name}.{expert_name}" if layer_name else expert_name
-            for param_name, weight_name, expert_id, shard_id in mapping:
-                if weight_name not in qual_name:
-                    continue
-                full_name = qual_name.replace(weight_name, param_name)
-                local_name = full_name.removeprefix(f"{layer_name}.")
-                param = getattr(layer, local_name, None)
-                if param is None:
-                    if local_name.endswith(("w13_bias", "w2_bias")):
+            matched = None
+            cache_key = qual_name.rsplit(".", 1)[0]
+            if cache_enabled:
+                candidate = match_cache.get(cache_key)
+                if candidate is not None and candidate[1] in qual_name:
+                    matched = candidate
+            if matched is None:
+                for candidate in mapping:
+                    if candidate[1] in qual_name:
+                        matched = candidate
+                        if cache_enabled:
+                            match_cache[cache_key] = candidate
                         break
-                    raise AttributeError(
-                        f"EXL3 routed experts {layer_name!r} has no parameter "
-                        f"{local_name!r} for checkpoint weight {qual_name!r}"
-                    )
-                ok = param.weight_loader(
-                    param=param,
-                    loaded_weight=loaded_weight,
-                    weight_name=full_name,
-                    shard_id=shard_id,
-                    expert_id=expert_id,
-                    return_success=True,
+            if matched is None:
+                continue
+
+            param_name, weight_name, expert_id, shard_id = matched
+            full_name = qual_name.replace(weight_name, param_name)
+            local_name = full_name.removeprefix(f"{layer_name}.")
+            param = getattr(layer, local_name, None)
+            if param is None:
+                if local_name.endswith(("w13_bias", "w2_bias")):
+                    continue
+                raise AttributeError(
+                    f"EXL3 routed experts {layer_name!r} has no parameter "
+                    f"{local_name!r} for checkpoint weight {qual_name!r}"
                 )
-                if ok:
-                    yield local_name
-                break
+            ok = param.weight_loader(
+                param=param,
+                loaded_weight=loaded_weight,
+                weight_name=full_name,
+                shard_id=shard_id,
+                expert_id=expert_id,
+                return_success=True,
+            )
+            if ok:
+                yield local_name
 
     return load_weights
 
@@ -3284,7 +3306,10 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 )
             self._logged = True
         # Release transient load leftovers between MoE layers on UMA hosts.
-        gc.collect()
+        # Discrete-GPU qualification may disable this expensive full-heap walk
+        # after verifying host RSS / MemAvailable stay healthy.
+        if os.environ.get("VLLM_EXL3_GC_AFTER_MOE_LAYER", "1") != "0":
+            gc.collect()
         if torch is not None and torch.cuda.is_available():
             try:
                 torch.cuda.empty_cache()
