@@ -121,6 +121,16 @@ def main():
                 m = mtp_re.match(v)
                 if m:
                     variants.add(f"mtp.layers.{n_main + int(m.group(1))}." + v[m.end():])
+        # Top-level checkpoint prefixes (lm_head, mtp.*) are not renamed by the
+        # checkpoint->module root mapping, but vLLM mounts the causal LM and its
+        # draft under a "language_model." submodule. Without that variant the
+        # exact-dict lookup misses and the layer falls back to the generic
+        # non_routed bits, which loads the wrong trellis word count.
+        if prefix == "lm_head" or prefix.startswith("mtp."):
+            for v in list(variants):
+                if v == "lm_head" or v.startswith("mtp."):
+                    variants.add(f"language_model.{v}")
+                    variants.add(f"model.{v}")
         for v in variants:
             dense_layers[v] = {"bits": int(k)}
             tail = v.split(".")
