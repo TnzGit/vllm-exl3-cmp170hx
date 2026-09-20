@@ -37,12 +37,14 @@ def _write_pack(tmp_path, *, aliases: bool):
             weight_map[key] = shard
 
     # Same source layer/expert tuple under MTP must not make the main key
-    # ambiguous.
-    mtp_key = "mtp.layers.0.ffn.experts.0.w1.trellis"
-    keys_by_shard["a.safetensors"][mtp_key] = torch.zeros(
-        (4, 4, 64), dtype=torch.int16
-    )
-    weight_map[mtp_key] = "a.safetensors"
+    # ambiguous. vLLM may expose this source layer as runtime mtp.layers.1
+    # after the one-layer main stack in this fixture.
+    for proj in ("w1", "w3", "w2"):
+        mtp_key = f"mtp.layers.0.ffn.experts.0.{proj}.trellis"
+        keys_by_shard["a.safetensors"][mtp_key] = torch.zeros(
+            (4, 4, 64), dtype=torch.int16
+        )
+        weight_map[mtp_key] = "a.safetensors"
 
     for shard, tensors in keys_by_shard.items():
         safetensors_torch.save_file(tensors, model / shard)
@@ -115,3 +117,22 @@ def test_trellis_index_cache_invalidates_on_index_change(tmp_path, monkeypatch):
 
     second = exl3._trellis_index_from_checkpoint(str(index))
     assert (False, 0, 0, "gate") not in second
+
+
+def test_prescan_maps_runtime_mtp_layer_offset(tmp_path, monkeypatch):
+    model = _write_pack(tmp_path, aliases=False)
+    monkeypatch.setenv("VLLM_EXL3_MODEL_DIR", str(model))
+    exl3._TRELLIS_INDEX_CACHE.clear()
+
+    # Source has main layers.0 and mtp.layers.0. Runtime numbers the MTP layer
+    # after the main stack -> mtp.layers.1 in this one-main-layer fixture.
+    layer = SimpleNamespace(
+        layer_name="mtp.layers.1.ffn.experts",
+        starting_expert_offset=0,
+    )
+    shapes = exl3._try_prescan_trellis_shapes(layer, 1)
+
+    assert shapes is not None
+    assert shapes["gate"] == {0: (4, 4, 64)}
+    assert shapes["up"] == {0: (4, 4, 64)}
+    assert shapes["down"] == {0: (4, 4, 64)}
