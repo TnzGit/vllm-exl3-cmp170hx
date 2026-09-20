@@ -169,3 +169,17 @@ Only promote an open upstream change into this fork after either (a) our exact
 R0 configuration reproduces its defect, or (b) the change becomes a required
 dependency of an explicitly chosen R1 experiment. Preserve a minimal A/B for
 every such backport.
+
+### MTP async-metadata optimization #55054 — not an R0 rescue target
+
+Upstream #55054 is mechanically close to vLLM 0.29.0: the 0.29 short-conv metadata builder still performs the same synchronous request-index `.to(device)` calls and already imports `async_tensor_h2d`.
+
+However, upstream's same-node GB300 C1 measurement for MTP3 improved output throughput by **9.877%** (GPU activity span -17.1%). The CMP170HX R0 measurements show:
+
+- k=1: ~21-25% slower than no-draft
+- k=2: ~33% slower
+- k=3: ~45% slower
+
+Therefore #55054 is not expected to overturn the R0 production decision. Even applying the upstream ~10% throughput gain in full leaves k=1 materially behind no-draft; the more optimistic 17% span reduction is still insufficient to establish a win.
+
+Do not create a dedicated R0 backport solely to rescue MTP. If a later R1 runtime already contains #55054, remeasure MTP opportunistically as part of that runtime qualification.
