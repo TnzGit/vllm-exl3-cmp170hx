@@ -8,6 +8,21 @@ An out-of-tree vLLM plugin registering `--quantization exl3` for EXL3 (ExLlamaV3
 
 **Use a compatible model recipe, not a stock/older vLLM installation.** The current integration targets runtimes exposing the required model and `RoutedExperts` interfaces. Installing this plugin alone does not add a missing model architecture to vLLM or ExLlamaV3.
 
+
+## CMP170HX fork research
+
+This fork keeps upstream `vllm-exl3` provenance and licensing intact while
+qualifying Qwen3.8-Flash-Next EXL3 on a single CMP170HX / SM80.
+
+- immutable Qwen reference: `baseline/qwen38-flash-next-94c29ba`
+- active research: `research/qwen38-flash-next-cmp170hx`
+- bring-up contract: [docs/CMP170HX_QWEN38_FLASH_NEXT.md](docs/CMP170HX_QWEN38_FLASH_NEXT.md)
+- task board: [docs/CMP170HX_QWEN38_TASKS.md](docs/CMP170HX_QWEN38_TASKS.md)\n- vLLM upstream audit: [docs/UPSTREAM_QWEN_AUDIT.md](docs/UPSTREAM_QWEN_AUDIT.md)
+
+No CMP170HX Flash-Next throughput result is claimed until the target checkpoint
+passes the hardware qualification gates in those documents.
+
+
 ## Credits and provenance
 
 Please credit **vcruz305** and the upstream work this project builds on:

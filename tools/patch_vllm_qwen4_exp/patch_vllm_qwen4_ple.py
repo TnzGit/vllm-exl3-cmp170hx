@@ -1,12 +1,22 @@
-"""Two plumbing lines in vLLM's qwen4_exp so the quant config is consulted for
-lm_head and for the PLE n-gram table.
+"""Patch Qwen4Exp so EXL3 quantization reaches lm_head and the PLE n-gram table.
 
-  nvidia/model.py   ParallelLMHead(...)              gains quant_config=self.quant_config
-  nvidia/ple_layer.py PLEVocabParallelEmbedding(...) gains quant_config=quant_config
+vLLM has used two PLE constructor shapes across the Qwen4Exp integration:
 
-Without these vLLM builds both layers unquantized regardless of --quantization,
-so an EXL3 pack whose lm_head / n-gram rows are trellis tensors cannot load.
-Backs up each file to <file>.orig (kept if present), idempotent, compile-checked.
+* older builds construct ``PLEVocabParallelEmbedding`` without a model-specific
+  ``quant_method``;
+* vLLM 0.29.x preselects an FP8-only PLE method with
+  ``_get_ple_embedding_quant_method(...)``.
+
+For the 0.29.x shape we must keep that preselected method *and* pass
+``quant_config``. ``VocabParallelEmbedding`` only consults ``quant_config`` when
+``quant_method`` is ``None``. This preserves the Qwen FP8 special case while
+allowing EXL3's ``Exl3Config.get_quant_method`` to return
+``Exl3EmbeddingMethod`` for the row-wise n-gram table.
+
+The main lm_head still needs ``quant_config=self.quant_config``.
+
+Backs up each changed file to <file>.orig (kept if present), is idempotent, and
+compile-checks the result.
 
 usage: python3 patch_vllm_qwen4_ple.py <site-packages/vllm>
 """
@@ -14,49 +24,64 @@ import os
 import shutil
 import sys
 
-MODEL_OLD = '''        self.lm_head = ParallelLMHead(
+MODEL_OLD = """        self.lm_head = ParallelLMHead(
             config.vocab_size,
             config.hidden_size,
             prefix=maybe_prefix(prefix, "lm_head"),
         )
-'''
-MODEL_NEW = '''        self.lm_head = ParallelLMHead(
+"""
+MODEL_NEW = """        self.lm_head = ParallelLMHead(
             config.vocab_size,
             config.hidden_size,
             quant_config=self.quant_config,
             prefix=maybe_prefix(prefix, "lm_head"),
         )
-'''
-PLE_OLD = '''        self.ngram_embedding = PLEVocabParallelEmbedding(
+"""
+
+# Older Qwen4Exp PLE constructor.
+PLE_OLD_LEGACY = """        self.ngram_embedding = PLEVocabParallelEmbedding(
             padded_vocab_size,
             self.head_dim,
             params_dtype=params_dtype,
             padding_size=divisor,
             prefix=f"{prefix}.ngram_embedding",
-'''
-PLE_NEW = '''        self.ngram_embedding = PLEVocabParallelEmbedding(
+"""
+PLE_NEW_LEGACY = """        self.ngram_embedding = PLEVocabParallelEmbedding(
             padded_vocab_size,
             self.head_dim,
             params_dtype=params_dtype,
             padding_size=divisor,
             quant_config=quant_config,
             prefix=f"{prefix}.ngram_embedding",
-'''
+"""
+
+# vLLM 0.29.x: retain the model-specific FP8 method, but also pass the full
+# quant config. When the helper returns None for EXL3, VocabParallelEmbedding
+# falls through to quant_config.get_quant_method(self, prefix=...).
+PLE_OLD_029 = """        self.ngram_embedding = PLEVocabParallelEmbedding(
+            padded_vocab_size,
+            self.head_dim,
+            params_dtype=params_dtype,
+            padding_size=divisor,
+            prefix=f"{prefix}.ngram_embedding",
+            quant_method=_get_ple_embedding_quant_method(
+                quant_config, f"{prefix}.ngram_embedding"
+            ),
+"""
+PLE_NEW_029 = """        self.ngram_embedding = PLEVocabParallelEmbedding(
+            padded_vocab_size,
+            self.head_dim,
+            params_dtype=params_dtype,
+            padding_size=divisor,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ngram_embedding",
+            quant_method=_get_ple_embedding_quant_method(
+                quant_config, f"{prefix}.ngram_embedding"
+            ),
+"""
 
 
-def patch(path: str, old: str, new: str) -> bool:
-    if not os.path.exists(path):
-        print(f"ERROR: {path} not found")
-        return False
-    src = open(path, encoding="utf-8").read()
-    if new in src:
-        print(f"already patched: {path}")
-        return True
-    n = src.count(old)
-    if n != 1:
-        print(f"ERROR: anchor found {n} times in {path} (need 1)")
-        return False
-    out = src.replace(old, new)
+def _write_checked(path: str, out: str) -> bool:
     try:
         compile(out, path, "exec")
     except SyntaxError as e:
@@ -65,9 +90,62 @@ def patch(path: str, old: str, new: str) -> bool:
     backup = path + ".orig"
     if not os.path.exists(backup):
         shutil.copyfile(path, backup)
-    open(path, "w", encoding="utf-8").write(out)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(out)
     print(f"patched {path} (backup {backup})")
     return True
+
+
+def patch_one(path: str, old: str, new: str) -> bool:
+    if not os.path.exists(path):
+        print(f"ERROR: {path} not found")
+        return False
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    if new in src:
+        print(f"already patched: {path}")
+        return True
+    n = src.count(old)
+    if n != 1:
+        print(f"ERROR: anchor found {n} times in {path} (need 1)")
+        return False
+    return _write_checked(path, src.replace(old, new))
+
+
+def patch_ple(path: str) -> bool:
+    if not os.path.exists(path):
+        print(f"ERROR: {path} not found")
+        return False
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+
+    if PLE_NEW_029 in src or PLE_NEW_LEGACY in src:
+        print(f"already patched: {path}")
+        return True
+
+    # The vLLM 0.29.x constructor contains the legacy prefix verbatim, so
+    # matching both layouts independently makes a valid 0.29.x source look
+    # ambiguous. Prefer the more specific layout, then fall back to legacy.
+    n029 = src.count(PLE_OLD_029)
+    if n029:
+        if n029 != 1:
+            print(
+                f"ERROR: vLLM 0.29.x PLE anchor found {n029} times in {path} "
+                "(need 1)"
+            )
+            return False
+        print("detected PLE layout: vLLM 0.29.x")
+        return _write_checked(path, src.replace(PLE_OLD_029, PLE_NEW_029))
+
+    nlegacy = src.count(PLE_OLD_LEGACY)
+    if nlegacy != 1:
+        print(
+            f"ERROR: legacy PLE anchor found {nlegacy} times in {path} "
+            "(need 1)"
+        )
+        return False
+    print("detected PLE layout: legacy")
+    return _write_checked(path, src.replace(PLE_OLD_LEGACY, PLE_NEW_LEGACY))
 
 
 def main() -> int:
@@ -75,8 +153,8 @@ def main() -> int:
         print(__doc__)
         return 1
     root = os.path.join(sys.argv[1], "models", "qwen4_exp", "nvidia")
-    ok = patch(os.path.join(root, "model.py"), MODEL_OLD, MODEL_NEW)
-    ok = patch(os.path.join(root, "ple_layer.py"), PLE_OLD, PLE_NEW) and ok
+    ok = patch_one(os.path.join(root, "model.py"), MODEL_OLD, MODEL_NEW)
+    ok = patch_ple(os.path.join(root, "ple_layer.py")) and ok
     return 0 if ok else 1
 
 

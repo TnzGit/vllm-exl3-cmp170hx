@@ -21,7 +21,7 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _TOOLS = os.path.join(_HERE, "..", "tools", "exl3_pack_tools")
 _SCAN = os.path.join(_TOOLS, "qwen_pack_scan.py")
-_CONFIG = os.path.join(_TOOLS, "qwen_pack_config.py")
+_CONFIG = os.path.join(_TOOLS, "qwen_pack_config.py")\n_MANIFEST = os.path.join(_HERE, "..", "tools", "cmp170hx_qwen_pack_manifest.py")
 
 TABLE = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding"
 BITS, HEADS, ROWS = 3, 2, 64
@@ -216,3 +216,62 @@ def test_config_tool_refuses_scan_problems(tmp_path):
     r = _run(_CONFIG, pack, "--dry-run")
     assert r.returncode == 2 and "REFUSE" in r.stdout
     assert re.search(r"shard indices not contiguous", r.stdout)
+
+
+def test_cmp170hx_manifest_uses_headers_when_source_bits_is_fractional(tmp_path):
+    pack = _pack(tmp_path, unsharded=True)
+
+    cfg_path = os.path.join(pack, "config.json")
+    cfg = json.load(open(cfg_path))
+    cfg["text_config"]["quantization_config"]["bits"] = 3.05
+    json.dump(cfg, open(cfg_path, "w"), indent=2)
+
+    # The manifest records index identity when present but does not need weight
+    # payloads from it; keep this fixture intentionally tiny.
+    json.dump(
+        {
+            "metadata": {"total_size": 0},
+            "weight_map": {
+                f"{TABLE}.trellis": "ngram_embedding.safetensors",
+            },
+        },
+        open(os.path.join(pack, "model.safetensors.index.json"), "w"),
+        indent=2,
+    )
+
+    before = open(cfg_path, "rb").read()
+    r = subprocess.run(
+        [sys.executable, _MANIFEST, pack],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    manifest = json.loads(r.stdout)
+
+    assert manifest["config"]["source_bits"] == 3.05
+    assert manifest["config"]["source_bits_python_type"] == "float"
+    assert manifest["scan"]["expert_k_values"] == [2, 3]
+    assert list(manifest["scan"]["ngram_tables"].values())[0]["bits"] == 3
+    assert any("not an integer" in w for w in manifest["warnings"])
+
+    assert open(cfg_path, "rb").read() == before
+    assert not os.path.exists(cfg_path + ".native")
+
+def test_config_tool_rewrites_fractional_source_bits_from_tensor_headers(tmp_path):
+    pack = _pack(tmp_path, unsharded=True)
+    cfg_path = os.path.join(pack, "config.json")
+    cfg = json.load(open(cfg_path))
+    cfg["text_config"]["quantization_config"]["bits"] = 3.05
+    json.dump(cfg, open(cfg_path, "w"), indent=2)
+
+    _scan(pack)
+    r = _run(_CONFIG, pack)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rewritten = json.load(open(cfg_path))["text_config"]["quantization_config"]
+
+    # Physical K comes from safetensors header geometry, not the fractional
+    # average bpw stored by the source pack.
+    assert rewritten["bits"] == 3
+    assert rewritten["native_quantization_config"]["bits"] == 3.05
+    assert rewritten["ngram_embedding"]["bits"] == 3
