@@ -98,3 +98,74 @@ only after the same target checkpoint passes:
 - MTP qualification if enabled;
 - memory ledger;
 - measurable end-to-end benefit or a necessary correctness fix.
+
+## Fresh correctness/performance watchlist
+
+These items were reviewed after the initial R0/R1 split. They are **not** a
+request to bulk-backport current vLLM main.
+
+### Before enabling MTP on R0
+
+- **#56742 (open): Qwen4Exp MTP buffer placement/config/warmup.** Direct
+  inspection of vLLM 0.29.0 confirms `_mtp_hidden_buffer = torch.empty(...)`
+  has no explicit `device=` argument. The old recipe nevertheless served MTP,
+  so do not assume failure from source alone. On the first MTP boot, record
+  the actual `_mtp_hidden_buffer.device`. If it is wrong, backport only the
+  configured-device allocation with a discriminating CPU/source test before
+  changing other MTP code.
+- **#55054 (merged after v0.29.0): async PLE MTP metadata transfers.** Reported
+  removal of two per-step stream synchronizations and sizable C1 gains on
+  newer Qwen code. Treat as a high-value R1/selective-backport candidate only
+  after the R0 MTP baseline is measured.
+
+### Prefix-cache / multi-request / PP gates, not first-boot blockers
+
+- **#57616 (open): plain MTP can zero prefix-cache insertions.** Keep prefix
+  caching out of the first MTP throughput gate. When prefix caching is later
+  enabled, repeated identical prompts must produce measured cache hits before
+  any TTFT/cache claim is accepted.
+- **#55390 / #56026 (open): draft KV-group annotation on hybrid Qwen layouts.**
+  Relevant to prefix-cache/offload policies. Do not backport for C1 no-offload
+  baseline; audit if cache/offload is enabled.
+- **#55506 (open): Mamba spec-decode block tables indexed by batch row instead
+  of request slot.** The reported reproducer requires PP>=2 + MTP + prefix
+  caching + at least three concurrent slots. It is especially notable because
+  the PR reports silent corruption on SM80 and includes a 4x CMP170HX A/B.
+  Our first target is PP1/C1, so this is not an R0 blocker. If the project
+  later adds PP or that concurrency shape, this becomes a P0 correctness gate
+  before performance work.
+- **#57253 (open): cache-registered Mamba state retirement.** Relevant to
+  long-prefix reuse under cache pressure; not a C1 first-boot blocker.
+
+### QSA / PLE candidates after R0
+
+- **#54873 (merged after v0.29.0): sparse-GQA valid-count optimization.**
+  Strong microbench gains for short prefill/decode but modest e2e gains on
+  GB300. Add to R1 after the QSA prefill/decode split, and remeasure on SM80.
+- **#54890 (merged): FP8 QSA indexer cache.** Potential long-context bandwidth
+  win, but published e2e short-context results were mostly noise and were on
+  GB300. Do not change cache precision before the baseline memory/quality
+  ledger exists.
+- **#55557 (merged): FP8 main QSA KV cache.** Can materially increase KV
+  capacity; this is a later capacity experiment, not a first-boot default.
+  Re-qualify quality and SM80 kernel support before adopting.
+- **#55375 (merged): fused-PLE state-index stride correctness.** It fixes the
+  fused PLE implementation introduced after v0.29.0; R0 does not contain that
+  fused PLE path, so do not backport it to R0. It is mandatory context if an
+  R1 EXL3 adapter ever adopts upstream fused PLE.
+- **#55309 (merged): PLE residual / QSA output-gate fusion.** Current-main
+  optimization only; depends on the newer Qwen kernel/dataflow and is not an
+  R0 patch.
+
+### Open items to watch rather than preemptively patch
+
+- #54912 QSA raw-key ring widening for certain MTP depths.
+- #56500 bounded QSA prefill-logits workspace.
+- #57105 QSA indexer workspace fragmentation.
+- #55122 persistent-topk determinism.
+- #56577 FP8 Qwen4Exp MTP proposal head.
+
+Only promote an open upstream change into this fork after either (a) our exact
+R0 configuration reproduces its defect, or (b) the change becomes a required
+dependency of an explicitly chosen R1 experiment. Preserve a minimal A/B for
+every such backport.
