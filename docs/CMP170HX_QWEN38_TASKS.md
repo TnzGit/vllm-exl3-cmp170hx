@@ -175,3 +175,16 @@ If the sentinel moves by more than roughly 2-3%, or an anomalous/cliff point app
 - [x] production profile updated to no-draft + coop MoE
 
 Next gate: **re-profile with coop enabled**. Do not select the next dense/OTHER optimization using the stale pre-coop Amdahl percentages.
+
+## post-COOP dense dispatch qualification — complete
+
+- [x] exact-pack K=4/K=5 SM80 microbenchmark
+- [x] current `exl3_gemv_int8_sq` confirmed fastest among existing ExLlamaV3 1.5.0 dispatch choices
+- [x] K=4 fp16/QTIP alternatives project to ~11-15% end-to-end regressions
+- [x] K=5 crossover/fp16 fallback is ~1.39-1.43x slower
+- [x] no candidate cleared >=5% projected end-to-end gate
+- [x] no full-engine A/B and no new CUDA kernel
+
+Decision: **dense existing-dispatch direction CLOSED**.
+
+Next gate: eager attribution of post-COOP framework elementwise/copy + unattributed BF16 GEMM/GEMV. Eager/profiler timings are diagnostic only and must never be compared with the ~19.05 ms/token production baseline.
