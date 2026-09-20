@@ -102,7 +102,7 @@ print(
             "profiler": "torch",
             "torch_profiler_dir": os.path.abspath(sys.argv[1]),
             "torch_profiler_with_stack": True,
-            "torch_profiler_record_shapes": False,
+            "torch_profiler_record_shapes": os.environ.get("TORCH_PROFILER_RECORD_SHAPES", "0") == "1",
             "torch_profiler_with_memory": False,
             "torch_profiler_with_flops": False,
             "torch_profiler_use_gzip": True,
@@ -136,6 +136,7 @@ echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
 echo "  CUDA graph mode              PIECEWISE"
 echo "  torch profiler               ${TORCH_PROFILER_DIR:-disabled}"
+echo "  torch profiler shapes        ${TORCH_PROFILER_RECORD_SHAPES:-0}"
 
 echo "[exec] vllm ${ARGS[*]}"
 exec vllm "${ARGS[@]}"
