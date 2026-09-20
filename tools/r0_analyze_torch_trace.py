@@ -31,9 +31,33 @@ def _bucket(name: str) -> str:
     if "gdn" in n or "gated_delta" in n or "short_conv" in n:
         return "GDN/RECURRENT"
     if "exl3_moe" in n or ("exl3" in n and "moe" in n):
-        return "EXL3_MOE"
+        return "EXL3_MOE_COOP" if "coop" in n else "EXL3_MOE"
+    if "_hc_" in n or "qwen4_exp_hc" in n or "hyperconnection" in n:
+        return "HYPER_CONNECTION"
     if "exl3" in n:
         return "EXL3_OTHER"
+    if (
+        "gemv2t_kernel" in n
+        or "gemvx::kernel" in n
+        or "cutlass_80_wmma" in n
+    ):
+        # These are real BF16 GEMM/GEMV costs, but the raw kernel name does not
+        # prove whether the caller is HC, attention projection, LM head, etc.
+        return "BF16_GEMM_UNATTRIBUTED"
+    if (
+        "direct_copy_kernel" in n
+        or "bfloat16_copy_kernel" in n
+        or "memcpy32_post" in n
+        or "fillfunctor" in n
+        or "compare_scalar_kernel" in n
+        or "index_elementwise_kernel" in n
+        or "_scatter_gather_elementwise" in n
+    ):
+        return "FRAMEWORK_ELEMENTWISE"
+    if "persistent_topk" in n or "bitonicsort" in n:
+        # Counts can resemble QSA layers, but do not silently attribute a
+        # generic top-k/sort kernel without correlation evidence.
+        return "TOPK_SORT_UNATTRIBUTED"
     if "gemm" in n or "mma" in n or "matmul" in n:
         return "GEMM_OTHER"
     return "OTHER"
@@ -57,6 +81,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("trace", type=Path)
     ap.add_argument("--top", type=int, default=40)
+    ap.add_argument("--steps", type=float, default=None, help="optional decode-step count for per-step totals")
     args = ap.parse_args()
 
     obj = _load(args.trace)
@@ -108,6 +133,16 @@ def main() -> int:
         {k: (int(v[0]), float(v[1])) for k, v in cpu_ops.items()},
         args.top,
     )
+
+    if args.steps is not None:
+        if args.steps <= 0:
+            raise SystemExit("--steps must be > 0")
+        kernel_us = sum(float(v[1]) for v in kernels.values())
+        print(
+            f"\nGPU kernel total per decode step: "
+            f"{kernel_us / args.steps / 1000.0:.4f} ms "
+            f"({args.steps:g} steps)"
+        )
 
     if not kernels:
         raise SystemExit(
