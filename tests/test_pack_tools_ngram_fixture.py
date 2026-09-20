@@ -21,7 +21,8 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _TOOLS = os.path.join(_HERE, "..", "tools", "exl3_pack_tools")
 _SCAN = os.path.join(_TOOLS, "qwen_pack_scan.py")
-_CONFIG = os.path.join(_TOOLS, "qwen_pack_config.py")\n_MANIFEST = os.path.join(_HERE, "..", "tools", "cmp170hx_qwen_pack_manifest.py")
+_CONFIG = os.path.join(_TOOLS, "qwen_pack_config.py")
+_MANIFEST = os.path.join(_HERE, "..", "tools", "cmp170hx_qwen_pack_manifest.py")
 
 TABLE = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding"
 BITS, HEADS, ROWS = 3, 2, 64
