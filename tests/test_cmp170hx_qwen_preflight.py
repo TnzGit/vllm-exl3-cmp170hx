@@ -75,7 +75,7 @@ MTP_UNPATCHED = """class MTP:
 def _tree(tmp_path: Path, *, vision: bool, mtp: bool) -> Path:
     root = tmp_path / "vllm"
     qwen = root / "models" / "qwen4_exp" / "nvidia"
-    qwen.mkdir(parents=True)
+    qwen.mkdir(parents=True, exist_ok=True)
     (qwen / "model.py").write_text(MODEL_VISION if vision else MODEL_BASE)
     (qwen / "ple_layer.py").write_text(PLE)
     (qwen / "mtp.py").write_text(MTP_PATCHED if mtp else MTP_UNPATCHED)
