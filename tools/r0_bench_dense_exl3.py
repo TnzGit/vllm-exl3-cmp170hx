@@ -8,7 +8,7 @@ ExLlamaV3 caches several GEMV environment variables on first C++ use.
 The child loads one real dense EXL3 tensor family from the prepared pack and
 calls exllamav3_ext.exl3_gemm directly with preallocated input/output/scratch.
 This isolates the same C1 dispatch used by LinearEXL3 without model startup,
-HTTP, vLLM scheduling, output allocation, or CUDA-graph replay.
+HTTP or vLLM scheduling. Timing uses a small CUDA graph so host enqueue gaps do not dominate tiny GEMVs.
 
 No production kernel is modified by this tool.
 
