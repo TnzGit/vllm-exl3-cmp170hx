@@ -134,6 +134,23 @@ Gates:
 - actual EXL3 dispatch recorded
 - memory ledger recorded
 
+
+
+### Text-only first profile
+
+vLLM 0.29 exposes `--language-model-only` for multimodal hybrid models.
+Qwen4Exp has an explicit text-only branch: the visual module is replaced by a
+missing-layer placeholder and `visual.*` checkpoint weights are dropped during
+load. QSA also selects text-only-specific RoPE/fusion behavior.
+
+Use this mode for the first CMP170HX profile unless multimodal serving is an
+explicit requirement. It reduces the resident-weight envelope and removes the
+vision tower from the first performance question.
+
+This flag is part of the runtime identity. Do not compare a text-only run with
+a multimodal-loaded run as if only weights changed. If multimodal support is
+needed later, qualify it as a separate service profile.
+
 ### F3
  - MTP qualification
 
