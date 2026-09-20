@@ -134,3 +134,37 @@ KV corruption, and not an EXL3 dequantization error.
    `trellis dest (160, 15520, 64) != loaded (160, 15520, 80)`.
 
 Both are recorded as separate commits with regression tests.
+
+## Load-path A/B: PR #2 (`fix/qwen-trellis-prescan-load`)
+
+Baseline (old plugin, measured repeatedly): weight load ~330–335 s,
+engine init ~114 s, total ~444 s, 73,728 staging-fallback warnings.
+
+With PR #2 on the same checkpoint, pack, runtime and `gpu_memory_utilization`:
+
+| marker | count | expected |
+|---|---|---|
+| `EXL3 trellis PRESCAN ready` | 48 | 48 (one per MoE layer) |
+| `mode=direct_plan` | 48 | 48 |
+| `mode=post_stage_pack` | 0 | 0 |
+| `staging fallback summary` | 0 | 0 |
+| `staging fallback (no arena plan)` | 0 | 0 |
+
+| phase | baseline | PR #2 | change |
+|---|---|---|---|
+| weight load | ~330 s | **187.7 s** | **-43%** |
+| post-load init | ~114 s | 31.7 s | -72% |
+| total startup | ~444 s | **~219 s** | **-51%** |
+
+Correctness and stability:
+
+- Greedy parity on the deterministic prompt: identical token IDs, 4/4 runs.
+- Xid delta: 0.
+- Peak VRAM 59,576 MiB (baseline 58,694 MiB); KV pool 9.62 GiB
+  (baseline 8.84 GiB) — direct-fill also freed staging pressure.
+- Host RSS 3.7 GiB, peak 717 GiB virtual (mmap of the 72 GiB pack).
+
+Interpretation per the agreed bands: 187.7 s lands in the 120–200 s band, i.e.
+a major win that still leaves the remaining generic per-tensor loader (~304k
+tensor entries) as the next candidate. Marker batching and a shard-oriented
+routed-expert loader are deliberately NOT started before a profile proves them.
