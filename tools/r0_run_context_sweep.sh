@@ -18,7 +18,7 @@ TAG="${1:-no-draft}"
 shift || true
 CONTEXTS=("$@")
 if [[ ${#CONTEXTS[@]} -eq 0 ]]; then
-  CONTEXTS=(4096 32768 65536 126000 160000 200000 250000)
+  CONTEXTS=(4096 32768 65536 160000 250000)
 fi
 
 export PATH="$V/bin:$PATH"
@@ -30,7 +30,14 @@ export VLLM_EXL3_NGRAM_KERNEL=ext
 mkdir -p "$R/results"
 
 xid_count() {
-  grep -ci xid /var/log/syslog 2>/dev/null || echo 0
+  # Count GPU Xid events only: "NVRM: Xid (PCI:...)" lines from the kernel ring
+  # buffer. A bare "xid" grep also matches unrelated driver messages (for
+  # example the r8169 NIC prints "XID 541"), which would fake a nonzero delta.
+  # grep -c exits non-zero on no match, so force success and keep one integer.
+  local n
+  n=$( { journalctl -k 2>/dev/null | grep -ciE "NVRM: Xid" || true; } | head -1 | tr -cd '0-9' )
+  [ -n "$n" ] || n=0
+  echo "$n"
 }
 
 wait_healthy() {
