@@ -133,7 +133,7 @@ Before any new kernel work:
 
 - [ ] widen address indices before large-stride multiplication when needed
 - [ ] exact-token formal prompts
-- [ ] fresh engine across formal context cells
+- [ ] fresh engine per runtime/configuration change or after failure; same-config context sweeps may reuse one healthy engine with start/end sentinel checks
 - [ ] Xid delta on every GPU experiment
 - [ ] numerator and denominator share the same interval
 - [ ] never label ms/output-token as ms/step
@@ -148,3 +148,19 @@ Before any new kernel work:
 - dense Marlin tuning
 - 27B k=3/5/7 values
 - FULL-graph assumptions for disk n-gram
+
+## Engine reuse rule
+
+Model startup is expensive for this EXL3 pack. Do not restart mechanically for every context cell.
+
+A fresh engine is required when changing runtime/env/patches, MTP k, graph mode, prefix-cache policy, cache dtype/geometry, memory configuration, or after crash/OOM/Xid.
+
+For a same-configuration C1 context sweep, reuse one healthy engine:
+
+- run a short-context sentinel first;
+- run the requested context cells;
+- verify running=0 / waiting=0 between requests;
+- require no Xid/preemption/abnormal VRAM growth;
+- repeat the sentinel at the end.
+
+If the sentinel moves by more than roughly 2-3%, or an anomalous/cliff point appears, rerun the decisive cell with a fresh engine. Final boundary/anomaly claims still need fresh-engine confirmation.
