@@ -130,6 +130,39 @@ def check_vllm_patches(vllm_dir: Path, profile: str) -> list[Check]:
         Check(
             (
                 "PASS"
+                if _block_has(
+                    model_src,
+                    "self._mtp_hidden_buffer = torch.empty(",
+                    ("device=",),
+                    span=700,
+                )
+                else "WARN"
+            )
+            if profile.endswith("-mtp")
+            else "SKIP",
+            "MTP hidden-buffer device",
+            (
+                "explicit configured-device allocation present"
+                if profile.endswith("-mtp")
+                else "not required for no-draft profile"
+            )
+            if _block_has(
+                model_src,
+                "self._mtp_hidden_buffer = torch.empty(",
+                ("device=",),
+                span=700,
+            )
+            else (
+                "source has no explicit device= on _mtp_hidden_buffer; upstream #56742 "
+                "tracks this class. Record the actual buffer.device after MTP boot "
+                "before deciding whether a minimal backport is needed."
+                if profile.endswith("-mtp")
+                else "not required for no-draft profile"
+            ),
+        ),
+        Check(
+            (
+                "PASS"
                 if all(
                     token in model_src
                     for token in (
