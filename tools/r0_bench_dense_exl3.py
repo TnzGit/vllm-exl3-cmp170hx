@@ -317,19 +317,32 @@ def child_main(args: argparse.Namespace) -> int:
     kernel_names = _kernel_names_from_one_call(op)
     torch.cuda.synchronize()
 
+    # Production C1 decode runs inside vLLM CUDA graphs. Timing thousands of
+    # eager calls from Python would insert host enqueue bubbles between tiny
+    # GEMVs and overstate kernel-family cost. Capture several logical GEMVs in
+    # one small graph, then replay that graph to amortize Python launch time.
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        for _ in range(args.graph_calls):
+            op()
+    for _ in range(10):
+        graph.replay()
+    torch.cuda.synchronize()
+
+    logical_calls = args.iters * args.graph_calls
     samples_ms: list[float] = []
     for _ in range(args.repeat):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
         for _ in range(args.iters):
-            op()
+            graph.replay()
         end.record()
         end.synchronize()
         samples_ms.append(float(start.elapsed_time(end)))
 
     us_per_call = [
-        ms * 1000.0 / args.iters for ms in samples_ms
+        ms * 1000.0 / logical_calls for ms in samples_ms
     ]
     median_us = statistics.median(us_per_call)
 
