@@ -897,8 +897,68 @@ def direct_fill_stats() -> dict[str, Any]:
     return dict(_DIRECT_FILL_STATS)
 
 
-def _find_containing_vma(addr: int) -> tuple[int, int, str] | None:
-    """Return (vma_start, vma_end, pathname) for addr from /proc/self/maps."""
+# ---------------------------------------------------------------------------
+# Diagnostic-only load profiling. Default OFF; enable with
+# VLLM_EXL3_LOAD_PROFILE=1. Aggregates wall time and call counts per load
+# phase so a startup profile can be attributed without emitting one log line
+# per tensor (the pack has ~304k of them).
+# ---------------------------------------------------------------------------
+_LOAD_PROFILE = os.environ.get("VLLM_EXL3_LOAD_PROFILE", "0") == "1"
+_LOAD_STATS: dict[str, list[float]] = {}
+
+
+def _lp_add(section: str, wall_ns: int) -> None:
+    if not _LOAD_PROFILE:
+        return
+    row = _LOAD_STATS.setdefault(section, [0.0, 0.0])
+    row[0] += 1.0
+    row[1] += float(wall_ns)
+
+
+class _lp_section:
+    """Time one load-path section when VLLM_EXL3_LOAD_PROFILE=1."""
+
+    __slots__ = ("_name", "_t0")
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._t0 = 0
+
+    def __enter__(self) -> "_lp_section":
+        if _LOAD_PROFILE:
+            self._t0 = time.perf_counter_ns()
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        if _LOAD_PROFILE:
+            _lp_add(self._name, time.perf_counter_ns() - self._t0)
+        return False
+
+
+def load_profile_summary(label: str = "") -> str:
+    """Render the aggregated load profile; empty string when profiling is off."""
+    if not _LOAD_PROFILE or not _LOAD_STATS:
+        return ""
+    lines = [f"EXL3 LOAD PROFILE{' ' + label if label else ''}"]
+    grand = 0.0
+    for name in sorted(_LOAD_STATS, key=lambda k: -_LOAD_STATS[k][1]):
+        calls, ns = _LOAD_STATS[name]
+        grand += ns
+        lines.append(
+            f"  {name:34s} calls={int(calls):9d} wall={ns / 1e9:9.3f}s "
+            f"avg={ns / max(calls, 1) / 1e3:10.2f}us"
+        )
+    lines.append(f"  {'TOTAL':34s} {'':9s} wall={grand / 1e9:9.3f}s")
+    return "\n".join(lines)
+
+
+def load_profile_reset() -> None:
+    _LOAD_STATS.clear()
+
+
+def _parse_vma_ranges() -> list[tuple[int, int, str]]:
+    """Sorted (start, end, pathname) for every mapping in /proc/self/maps."""
+    ranges: list[tuple[int, int, str]] = []
     try:
         with open("/proc/self/maps", "r", encoding="utf-8") as fh:
             for line in fh:
@@ -910,12 +970,36 @@ def _find_containing_vma(addr: int) -> tuple[int, int, str] | None:
                 if "-" not in span:
                     continue
                 lo_s, hi_s = span.split("-", 1)
-                lo, hi = int(lo_s, 16), int(hi_s, 16)
-                if lo <= addr < hi:
-                    path = parts[-1] if len(parts) >= 6 and parts[-1].startswith("/") else ""
-                    return lo, hi, path
+                path = parts[-1] if len(parts) >= 6 and parts[-1].startswith("/") else ""
+                ranges.append((int(lo_s, 16), int(hi_s, 16), path))
     except Exception:
-        return None
+        return []
+    ranges.sort()
+    return ranges
+
+
+# During a checkpoint load the madv reclaim path runs once per routed tensor
+# (~222k times for this pack). Re-reading /proc/self/maps each time cost ~104us
+# per call, measured as 23.2s of a 195s load. Mappings only get added while
+# shards are opened lazily, so cache the parsed table and refresh on a miss.
+# A stale hit at worst makes one madvise fail harmlessly; a stale miss only
+# skips one reclaim.
+_VMA_CACHE: list[tuple[int, int, str]] = []
+
+
+def _find_containing_vma(addr: int) -> tuple[int, int, str] | None:
+    """Return (vma_start, vma_end, pathname) for addr from /proc/self/maps."""
+    global _VMA_CACHE
+    ranges = _VMA_CACHE
+    if ranges:
+        for lo, hi, path in ranges:
+            if lo <= addr < hi:
+                return lo, hi, path
+    fresh = _parse_vma_ranges()
+    _VMA_CACHE = fresh
+    for lo, hi, path in fresh:
+        if lo <= addr < hi:
+            return lo, hi, path
     return None
 
 
@@ -987,8 +1071,10 @@ def _copy_weight_blocking(dest: "torch.Tensor", src: "torch.Tensor") -> None:
     suh/svh or dense EXL3 copy only serializes the loader. File-backed CPU
     pages are reclaimed after the blocking copy returns.
     """
-    dest.copy_(src, non_blocking=False)
-    _madv_dontneed_cpu_tensor(src)
+    with _lp_section("scale.copy_H2D"):
+        dest.copy_(src, non_blocking=False)
+    with _lp_section("scale.madv"):
+        _madv_dontneed_cpu_tensor(src)
 
 
 def _direct_fill_trellis_slot(
@@ -1024,8 +1110,10 @@ def _direct_fill_trellis_slot(
         src = src.to(dtype=torch.int16)
     if not src.is_contiguous():
         src = src.contiguous()
-    arena[idx].copy_(src, non_blocking=False)
-    _madv_dontneed_cpu_tensor(src)
+    with _lp_section("trellis.direct_H2D"):
+        arena[idx].copy_(src, non_blocking=False)
+    with _lp_section("trellis.madv"):
+        _madv_dontneed_cpu_tensor(src)
     _DIRECT_FILL_STATS["DIRECT_FILL_CALLS"] += 1
     _DIRECT_FILL_STATS["DIRECT_FILL_BYTES"] += transient
     _DIRECT_FILL_STATS["DIRECT_FILL_DEVICE"] = str(arena.device)
@@ -2587,9 +2675,15 @@ def _exl3_routed_experts_loader(layer: torch.nn.Module):
         layer_name = str(getattr(layer, "layer_name", ""))
         for expert_name, loaded_weight in weights:
             qual_name = f"{layer_name}.{expert_name}" if layer_name else expert_name
-            for param_name, weight_name, expert_id, shard_id in mapping:
-                if weight_name not in qual_name:
-                    continue
+            with _lp_section("expert.name_match"):
+                matched = None
+                for cand in mapping:
+                    if cand[1] in qual_name:
+                        matched = cand
+                        break
+            if matched is None:
+                continue
+            for param_name, weight_name, expert_id, shard_id in (matched,):
                 full_name = qual_name.replace(weight_name, param_name)
                 local_name = full_name.removeprefix(f"{layer_name}.")
                 param = getattr(layer, local_name, None)
@@ -2827,7 +2921,8 @@ class Exl3MoEMethod(FusedMoEMethodBase):
             _exl3_trellis_arena_enabled()
             and os.environ.get("VLLM_EXL3_ARENA_PRESCAN", "1") != "0"
         ):
-            shapes = _try_prescan_trellis_shapes(layer, int(num_experts))
+            with _lp_section("prescan"):
+                shapes = _try_prescan_trellis_shapes(layer, int(num_experts))
             if shapes is not None:
                 layer._exl3_trellis_shapes_pending = shapes
                 logger.info(
@@ -2901,7 +2996,8 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 dest = getattr(owner_mod, "w2_" + suffix).data[expert_id]
             else:
                 raise ValueError(f"unknown EXL3 shard_id={shard_id}")
-            dest.fill_(int(loaded.reshape(-1)[0].item()) if loaded.numel() else 0)
+            with _lp_section("marker.fill"):
+                dest.fill_(int(loaded.reshape(-1)[0].item()) if loaded.numel() else 0)
             return True if return_success else None
 
         if suffix == "trellis":
@@ -3284,12 +3380,20 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 )
             self._logged = True
         # Release transient load leftovers between MoE layers on UMA hosts.
-        gc.collect()
+        with _lp_section("per_layer.gc_collect"):
+            gc.collect()
         if torch is not None and torch.cuda.is_available():
             try:
-                torch.cuda.empty_cache()
+                with _lp_section("per_layer.empty_cache"):
+                    torch.cuda.empty_cache()
             except Exception:
                 pass
+        _lp_summary = load_profile_summary(
+            f"layer={getattr(layer, 'layer_name', '?')}"
+        )
+        if _lp_summary:
+            logger.info("%s", _lp_summary)
+            load_profile_reset()
 
     def apply(
         self,
