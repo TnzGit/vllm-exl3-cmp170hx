@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ def _load_module():
     spec = importlib.util.spec_from_file_location("r0_bench_dense_exl3", SCRIPT)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -48,6 +50,7 @@ def test_catalog_recovers_k_dims_and_codebook_flags(tmp_path):
         k5 + ".mul1": [],
         # Routed tensors must not appear in the dense catalog.
         "language_model.layers.0.mlp.experts.0.gate_proj.trellis": [160, 40, 48],
+        "language_model.mtp.layers.0.linear_attn.in_proj_qkv.trellis": [160, 384, 64],
     }
     _write_fake_safetensors(tmp_path / shard, entries)
     (tmp_path / "model.safetensors.index.json").write_text(
