@@ -679,6 +679,23 @@ def _try_prescan_trellis_shapes(
         return None
     layer_id = int(m.group(1))
     is_mtp = layer_name.startswith("mtp.") or ".mtp." in layer_name
+
+    # vLLM numbers Qwen MTP runtime layers after the main stack, while the
+    # checkpoint stores them under mtp.layers.0..N. Infer the main-stack size
+    # from the source index and translate only when an exact MTP layer id is
+    # absent. Main-model layer ids remain unchanged.
+    source_layer_id = layer_id
+    if is_mtp and not any(
+        ident[0] and ident[1] == source_layer_id for ident in key_index
+    ):
+        main_layer_ids = {ident[1] for ident in key_index if not ident[0]}
+        if main_layer_ids:
+            candidate = layer_id - (max(main_layer_ids) + 1)
+            if candidate >= 0 and any(
+                ident[0] and ident[1] == candidate for ident in key_index
+            ):
+                source_layer_id = candidate
+
     offset = int(
         getattr(layer, "starting_expert_offset", None)
         or getattr(layer, "expert_id_offset", None)
@@ -698,7 +715,7 @@ def _try_prescan_trellis_shapes(
     for local_e in range(int(num_experts)):
         global_e = offset + local_e
         for proj in ("gate", "up", "down"):
-            entry = key_index.get((is_mtp, layer_id, global_e, proj))
+            entry = key_index.get((is_mtp, source_layer_id, global_e, proj))
             if entry is None:
                 return None
             key, shard = entry
