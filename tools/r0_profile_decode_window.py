@@ -25,6 +25,18 @@ from pathlib import Path
 from typing import Any
 
 
+FILLER = (
+    "The quick brown fox jumps over the lazy dog while the silent panda reads "
+    "a book about quantum chromodynamics and semiconductor lithography. "
+)
+
+
+def _build_prompt(target_tokens: int) -> str:
+    words = FILLER.split()
+    reps = max(1, int(target_tokens * 0.75) // len(words))
+    return " ".join(words * reps)[: target_tokens * 6]
+
+
 def _headers(api_key: str | None, *, json_body: bool = True) -> dict[str, str]:
     out: dict[str, str] = {}
     if json_body:
@@ -85,7 +97,9 @@ def _resolve_model(base_url: str, api_key: str | None) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://127.0.0.1:8002")
-    ap.add_argument("--prompt-file", type=Path, required=True)
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--prompt-file", type=Path)
+    group.add_argument("--context", type=int)
     ap.add_argument("--model", default=None)
     ap.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     ap.add_argument("--max-tokens", type=int, default=96)
@@ -99,7 +113,11 @@ def main() -> int:
     if args.start_after_chunks < 0 or args.profile_chunks <= 0:
         raise SystemExit("chunk controls must be non-negative / positive")
 
-    prompt = args.prompt_file.read_text(encoding="utf-8")
+    if args.prompt_file is not None:
+        prompt = args.prompt_file.read_text(encoding="utf-8")
+    else:
+        assert args.context is not None
+        prompt = _build_prompt(args.context)
     model = args.model or _resolve_model(args.base_url, args.api_key)
 
     payload = {
@@ -199,6 +217,7 @@ def main() -> int:
         json.dumps(
             {
                 "model": model,
+                "context_target": args.context,
                 "chunks": chunks,
                 "output_chars": output_chars,
                 "elapsed_s": elapsed,
