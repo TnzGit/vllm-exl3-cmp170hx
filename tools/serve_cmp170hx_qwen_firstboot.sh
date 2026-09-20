@@ -138,9 +138,10 @@ printf '  %-28s %s\n' \
 echo "  speculation                  disabled"
 echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
-echo "  CUDA graph mode              ${ENFORCE_EAGER:+EAGER (profiling only)}"
-if [[ "${ENFORCE_EAGER:-0}" != "1" ]]; then
-  echo "  CUDA graph mode              PIECEWISE"
+if [[ "${ENFORCE_EAGER:-0}" == "1" ]]; then
+  echo "  execution mode               EAGER (profiling only)"
+else
+  echo "  execution mode               PIECEWISE CUDA graph"
 fi
 echo "  torch profiler               ${TORCH_PROFILER_DIR:-disabled}"
 echo "  torch profiler shapes        ${TORCH_PROFILER_RECORD_SHAPES:-0}"
