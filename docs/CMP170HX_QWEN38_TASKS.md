@@ -52,6 +52,10 @@ bring-up gate rather than an assumed CI result.
 
 ## F3 - MTP
 
+Start the first MTP comparison with prefix caching disabled and C1 so current upstream hybrid-cache annotation issues are not an attribution confound. Prefix caching is a separate later qualification gate.
+
+- [ ] Before MTP boot, apply `--profile text-mtp` and run the matching preflight.
+- [ ] Record the actual `_mtp_hidden_buffer.device`; vLLM 0.29 source lacks explicit `device=` and upstream #56742 is still open.
 - [ ] no draft
 - [ ] k=1
 - [ ] k=2
@@ -61,6 +65,12 @@ bring-up gate rather than an assumed CI result.
 - [ ] report accepted tokens/pass and actual draft iteration count
 - [ ] report target/draft time/pass
 - [ ] report output tok/s and ms/output-token
+
+### Prefix-cache qualification after the C1 MTP baseline
+
+- [ ] Enable prefix caching only after the no-prefix MTP baseline is stable.
+- [ ] Repeated byte-identical prompts must produce measured cache hits; do not infer cache activity from lower TTFT alone.
+- [ ] If hits remain zero, review upstream #57616 / #55390 / #56026 before tuning performance.
 
 ## F4 - context envelope
 
