@@ -101,12 +101,14 @@ def test_text_mtp_requires_only_mtp(tmp_path):
         mod.check_vllm_patches(_tree(tmp_path, vision=False, mtp=False), "text-mtp")
     )
     assert bad["MTP lm_head quant"].status == "FAIL"
+    assert bad["MTP hidden-buffer device"].status == "WARN"
     assert bad["vision split qkv"].status == "SKIP"
 
     good = _by_name(
         mod.check_vllm_patches(_tree(tmp_path, vision=False, mtp=True), "text-mtp")
     )
     assert good["MTP lm_head quant"].status == "PASS"
+    assert good["MTP hidden-buffer device"].status == "WARN"
 
 
 def test_multimodal_profile_requires_vision_filter(tmp_path):
