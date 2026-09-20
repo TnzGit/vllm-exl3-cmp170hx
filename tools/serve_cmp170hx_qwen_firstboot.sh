@@ -88,6 +88,10 @@ ARGS=(
   --compilation-config "$COMPILATION_CONFIG"
 )
 
+if [[ "${ENFORCE_EAGER:-0}" == "1" ]]; then
+  ARGS+=(--enforce-eager)
+fi
+
 if [[ -n "${TORCH_PROFILER_DIR:-}" ]]; then
   mkdir -p "$TORCH_PROFILER_DIR"
   PROFILER_CONFIG="$(
@@ -134,7 +138,10 @@ printf '  %-28s %s\n' \
 echo "  speculation                  disabled"
 echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
-echo "  CUDA graph mode              PIECEWISE"
+echo "  CUDA graph mode              ${ENFORCE_EAGER:+EAGER (profiling only)}"
+if [[ "${ENFORCE_EAGER:-0}" != "1" ]]; then
+  echo "  CUDA graph mode              PIECEWISE"
+fi
 echo "  torch profiler               ${TORCH_PROFILER_DIR:-disabled}"
 echo "  torch profiler shapes        ${TORCH_PROFILER_RECORD_SHAPES:-0}"
 
