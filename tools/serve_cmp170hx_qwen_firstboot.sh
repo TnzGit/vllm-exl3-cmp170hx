@@ -8,7 +8,7 @@
 # Optional:
 #   PORT=8002 MAX_MODEL_LEN=4096 MAX_NUM_SEQS=1 HOST=127.0.0.1
 #
-# This script does not patch vLLM. Run apply_qwen4_exp_patches.py separately.
+# This script does not patch vLLM. For R0 first boot run:\n#   python tools/apply_qwen4_exp_patches.py <site-packages/vllm> --profile text-no-draft
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
