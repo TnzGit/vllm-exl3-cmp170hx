@@ -8,34 +8,56 @@ Before changing the vLLM runtime, review `docs/UPSTREAM_QWEN_AUDIT.md`.
 
 ## CPU gate before touching GPU
 
-- [ ] `python -m py_compile tools/apply_qwen4_exp_patches.py tools/cmp170hx_qwen_preflight.py tools/cmp170hx_qwen_pack_manifest.py`
-- [ ] `python -m pytest -q tests/test_qwen4_exp_patch_script.py tests/test_qwen4_exp_patch_stack.py tests/test_cmp170hx_qwen_preflight.py tests/test_pack_tools_ngram_fixture.py`
-- [ ] Run the full CPU-capable repository test suite if dependencies are available.
-- [ ] If any test fails, fix the scaffold first; do not compensate in the serve command.
+- [x] `python -m py_compile tools/apply_qwen4_exp_patches.py tools/cmp170hx_qwen_preflight.py tools/cmp170hx_qwen_pack_manifest.py`
+- [x] `python -m pytest -q tests/test_qwen4_exp_patch_script.py tests/test_qwen4_exp_patch_stack.py tests/test_cmp170hx_qwen_preflight.py tests/test_pack_tools_ngram_fixture.py` (23 passed at `97ca716` / `34bb748`)
+- [x] Run the full CPU-capable repository test suite if dependencies are available.
+- [x] If any test fails, fix the scaffold first; do not compensate in the serve command.
+
+Four scaffold defects were fixed as separate commits; each one blocked the gate
+outright. A further 107 failures exist at the untouched baseline `7e5374c` and
+were reproduced on a pristine worktree, so they are pre-existing and not
+regressions from this bring-up (most are a venv PATH artifact: the tests shell
+out to `python`, which the isolated venv only exposes on `PATH`).
 
 GitHub Actions has not produced a run for this fork/PR yet, so local CPU validation is a hard
 bring-up gate rather than an assumed CI result.
 
 ## Runtime identity
 
-- [ ] Record exact vLLM artifact/version.
-- [ ] Use ExLlamaV3 v1.5.0 tag commit `0740edc2da569fb99174023c1d2988b1e98cb41e` for R0 and record the extension ABI.
-- [ ] Record exact vllm-exl3 SHA.
-- [ ] Record PyTorch, CUDA and driver.
-- [ ] Record exact model revision and config/index hashes.
-- [ ] Save pack scan output.
-- [ ] Save worker-side runtime diagnostics.
+- [x] Record exact vLLM artifact/version (0.29.0 wheel, sha256 verified).
+- [x] Use ExLlamaV3 v1.5.0 tag commit `0740edc2da569fb99174023c1d2988b1e98cb41e` for R0 and record the extension ABI.
+- [x] Record exact vllm-exl3 SHA.
+- [x] Record PyTorch, CUDA and driver.
+- [x] Record exact model revision and config/index hashes.
+- [x] Save pack scan output.
+- [x] Save worker-side runtime diagnostics.
+
+See `results/runtime_identity.json` and `results/pack_manifest.json`.
 
 ## F1 - pack contract
 
-- [ ] Run `qwen_pack_scan.py`.
-- [ ] Run `qwen_pack_config.py --dry-run`.
-- [ ] Verify n-gram layout/bits from tensor metadata.
-- [ ] Verify dense EXL3 map.
-- [ ] Verify routed expert K/codebook.
-- [ ] Verify lm_head and MTP tensors.
-- [ ] Verify vision split/fused-qkv contract.
-- [ ] Do not patch around ambiguous pack metadata.
+- [x] Run `qwen_pack_scan.py`.
+- [x] Run `qwen_pack_config.py --dry-run`.
+- [x] Verify n-gram layout/bits from tensor metadata (K=3, 128 shards x 2,500,012 rows, 16 heads).
+- [x] Verify dense EXL3 map.
+- [x] Verify routed expert K/codebook (K=3/4, `codebook=mul1`, 48 layers x 512 experts, top-k 10).
+- [x] Verify lm_head and MTP tensors.
+- [x] Verify vision split/fused-qkv contract (dropped by `--language-model-only`).
+- [x] Do not patch around ambiguous pack metadata.
+
+Two pack defects were found and fixed, both silent without action:
+
+1. The shipped `model.safetensors.index.json` covered only 7 shards (52.4 GB)
+   and omitted `ngram_embedding.safetensors` (18.48 GB). vLLM's loader trusts
+   `weight_map` over the files on disk, so the entire n-gram table would have
+   been skipped without an error. Regenerated (8 shards, 72.18 GB);
+   `model.safetensors.index.json.native` kept.
+2. `qwen_pack_config.py` emitted only bare checkpoint prefixes such as
+   `lm_head`, while vLLM mounts the causal LM and its draft under
+   `language_model.`. `Exl3Config._bits_for_non_routed` matches the layers dict
+   exactly, so `lm_head` fell back to the generic `non_routed_exl3.bits` (4)
+   while the pack stores K=5, and the load died on a trellis word-count
+   mismatch (`dest (160, 15520, 64) != loaded (160, 15520, 80)`).
 
 ## F2 - minimum service boot
 
