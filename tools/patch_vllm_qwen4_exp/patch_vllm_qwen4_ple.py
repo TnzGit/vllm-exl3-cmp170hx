@@ -123,26 +123,29 @@ def patch_ple(path: str) -> bool:
         print(f"already patched: {path}")
         return True
 
-    matches = []
-    for old, new, name in (
-        (PLE_OLD_029, PLE_NEW_029, "vLLM 0.29.x"),
-        (PLE_OLD_LEGACY, PLE_NEW_LEGACY, "legacy"),
-    ):
-        n = src.count(old)
-        if n:
-            matches.append((old, new, name, n))
+    # The vLLM 0.29.x constructor contains the legacy prefix verbatim, so
+    # matching both layouts independently makes a valid 0.29.x source look
+    # ambiguous. Prefer the more specific layout, then fall back to legacy.
+    n029 = src.count(PLE_OLD_029)
+    if n029:
+        if n029 != 1:
+            print(
+                f"ERROR: vLLM 0.29.x PLE anchor found {n029} times in {path} "
+                "(need 1)"
+            )
+            return False
+        print("detected PLE layout: vLLM 0.29.x")
+        return _write_checked(path, src.replace(PLE_OLD_029, PLE_NEW_029))
 
-    if len(matches) != 1 or matches[0][3] != 1:
-        detail = ", ".join(f"{name}={n}" for _, _, name, n in matches) or "none"
+    nlegacy = src.count(PLE_OLD_LEGACY)
+    if nlegacy != 1:
         print(
-            "ERROR: PLE constructor did not match exactly one supported layout "
-            f"in {path} ({detail})"
+            f"ERROR: legacy PLE anchor found {nlegacy} times in {path} "
+            "(need 1)"
         )
         return False
-
-    old, new, name, _ = matches[0]
-    print(f"detected PLE layout: {name}")
-    return _write_checked(path, src.replace(old, new))
+    print("detected PLE layout: legacy")
+    return _write_checked(path, src.replace(PLE_OLD_LEGACY, PLE_NEW_LEGACY))
 
 
 def main() -> int:
