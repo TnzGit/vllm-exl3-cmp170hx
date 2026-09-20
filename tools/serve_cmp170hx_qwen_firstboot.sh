@@ -36,7 +36,7 @@ export VLLM_EXL3_NGRAM_TABLE=disk
 export VLLM_EXL3_NGRAM_KERNEL="${VLLM_EXL3_NGRAM_KERNEL:-ext}"
 
 echo "[preflight]"
-python "$ROOT/tools/cmp170hx_qwen_preflight.py"
+python "$ROOT/tools/cmp170hx_qwen_preflight.py" --profile text-no-draft
 
 SPLIT_OPS="$(
   python - <<'PY'
