@@ -357,6 +357,32 @@ The main implementation delta is concentrated in `src/vllm_exl3/exl3.py`;
 the research base also contains later MoE work such as the cooperative decode
 path. This small, explicit interval is the first regression boundary.
 
+
+
+### Classification of the 20 post-baseline commits
+
+For first-boot triage, do not treat all 20 commits as equally likely Qwen
+regressions.
+
+Directly relevant candidates:
+
+- PR #27 / `exl3_moe_coop`: optional decode-shaped MoE path, explicitly
+  interesting on CMP170HX/SM80 but disabled unless requested.
+- `61613b1` / PR #29: removes an extra CUDA synchronization after a blocking
+  trellis copy; generic load-path behavior and worth keeping unless evidence
+  says otherwise.
+
+Mostly feature/platform-scoped changes:
+
+- UVA routed-expert arena placement
+- UMA `MADV_DONTNEED` source-page reclaim and compatibility wrappers
+- parity/EP placement diagnostics
+- DeepSeek-V4.1 tensor-metadata and mixed-K planning
+
+These should be inactive on the initial single-CMP170HX Qwen configuration
+unless explicitly enabled. If a regression appears, verify the guards in the
+effective process before reverting them wholesale.
+
 ## Cooperative MoE qualification gate
 
 The existing `exl3_moe_coop` path is relevant to CMP170HX because upstream
