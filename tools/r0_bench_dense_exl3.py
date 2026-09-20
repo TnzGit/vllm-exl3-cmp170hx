@@ -486,6 +486,53 @@ def _print_summary(results: list[dict[str, Any]]) -> None:
             )
 
 
+
+K4_FAMILY_SELECTORS = (
+    "linear_attn.in_proj_qkv",
+    "linear_attn.in_proj_z",
+    "linear_attn.out_proj",
+)
+
+
+def _print_k4_projection(
+    results: list[dict[str, Any]],
+    production_ms: float,
+    k4_sq_ms: float,
+) -> None:
+    """Project exact-shape K=4 relative timings onto measured post-COOP cost."""
+    by_variant: dict[str, dict[str, float]] = {}
+    for row in results:
+        base = str(row["base"])
+        family = next((s for s in K4_FAMILY_SELECTORS if s in base), None)
+        if family is None or int(row["k"]) != 4:
+            continue
+        by_variant.setdefault(str(row["variant"]), {})[family] = float(row["median_us"])
+
+    current = by_variant.get("current", {})
+    if not all(f in current for f in K4_FAMILY_SELECTORS):
+        print("\nK=4 projection unavailable: all three GDN K=4 families were not measured.")
+        return
+
+    current_sum = sum(current[f] for f in K4_FAMILY_SELECTORS)
+    print("\n## K=4 GDN projected end-to-end gate")
+    print(
+        f"calibration: measured K4-sq={k4_sq_ms:.3f} ms/step, "
+        f"production={production_ms:.3f} ms/token"
+    )
+    print(f"{'variant':22s} {'K4 ratio':>10s} {'save ms/tok':>12s} {'e2e %':>8s} {'gate':>6s}")
+    for variant, fam in sorted(by_variant.items()):
+        if variant == "current" or not all(f in fam for f in K4_FAMILY_SELECTORS):
+            continue
+        ratio = sum(fam[f] for f in K4_FAMILY_SELECTORS) / current_sum
+        save_ms = k4_sq_ms * (1.0 - ratio)
+        e2e_pct = save_ms / production_ms * 100.0
+        gate = "PASS" if e2e_pct >= 5.0 else "FAIL"
+        print(
+            f"{variant:22s} {ratio:10.4f} {save_ms:12.4f} "
+            f"{e2e_pct:8.3f} {gate:>6s}"
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", type=Path, required=True)
@@ -505,6 +552,8 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=5)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--output-json", type=Path, default=None)
+    ap.add_argument("--production-ms", type=float, default=19.053)
+    ap.add_argument("--k4-sq-ms", type=float, default=3.659)
 
     # Internal child-only args.
     ap.add_argument("--child-base", default=None)
@@ -554,6 +603,7 @@ def main() -> int:
             )
 
     _print_summary(results)
+    _print_k4_projection(results, args.production_ms, args.k4_sq_ms)
 
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
