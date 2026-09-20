@@ -43,13 +43,16 @@ development branch.
 Initial runtime contract to qualify:
 
 - vLLM: `0.29.0`
-- ExLlamaV3: `1.5.0`
+- ExLlamaV3: `1.5.0`, exact tag commit `0740edc2da569fb99174023c1d2988b1e98cb41e`
 - vllm-exl3: exact branch SHA, never just a package version
 - model: exact Hugging Face revision once downloaded
 - driver / CUDA / PyTorch: record exact values before the first benchmark
 
 If current `main` fails while the baseline branch works, compare only the
 20-commit interval `94c29ba..08ed1bf` before changing vLLM or the model.
+
+See also `docs/UPSTREAM_QWEN_AUDIT.md` for the R0/R1 vLLM runtime lanes and the
+reason newer Qwen PLE changes are not a drop-in EXL3 upgrade.
 
 ## Why disk-backed n-gram is the first baseline on CMP170HX
 
