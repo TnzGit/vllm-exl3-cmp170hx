@@ -68,6 +68,7 @@ ARGS=(
   --port "$PORT"
   --quantization exl3
   --language-model-only
+  --no-enable-prefix-caching
   --max-model-len "$MAX_MODEL_LEN"
   --max-num-seqs "$MAX_NUM_SEQS"
   --gpu-memory-utilization "$GPU_MEM_UTIL"
@@ -84,6 +85,7 @@ printf '  %-28s %s\n' \
   "VLLM_EXL3_NGRAM_TABLE" "$VLLM_EXL3_NGRAM_TABLE" \
   "VLLM_EXL3_NGRAM_KERNEL" "$VLLM_EXL3_NGRAM_KERNEL"
 echo "  speculation                  disabled"
+echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
 echo "  CUDA graph mode              PIECEWISE"
 
