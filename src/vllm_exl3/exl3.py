@@ -3133,8 +3133,9 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 _exl3_mem_snapshot("AFTER_GC", layer)
             if not self._logged:
                 logger.info(
-                    "EXL3 trellis arenas: before_allocs=%s after_arenas=%s "
-                    "final_bytes=%s temp_peak_bytes=%s",
+                    "EXL3 trellis arenas: mode=%s before_allocs=%s "
+                    "after_arenas=%s final_bytes=%s temp_peak_bytes=%s",
+                    stats.get("mode"),
                     stats.get("allocations_before"),
                     stats.get("allocations_after"),
                     stats.get("final_bytes"),
