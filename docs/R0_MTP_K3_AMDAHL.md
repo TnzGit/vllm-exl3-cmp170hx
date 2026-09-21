@@ -241,3 +241,34 @@ No optimization, no 64K head pruning, no lm_head vocab slicing, no host-sync
 removal, no custom kernel, no dense dispatch change, no MoE kernel change, no
 framework copy elimination, no graph-mode change, no prefix cache, no MTP k
 adjustment, no production launcher adoption or merge.
+
+## J. P0 update after upstream/static audit — #55054 outranks COOP re-A/B
+
+The original section I selected a k=3 COOP on/off measurement as the next
+experiment. That remains a valid historical comparison, but it is **superseded
+as P0** by stronger evidence found after this Amdahl was written.
+
+The same 14-pass trace records **84 `cudaStreamSynchronize` calls = 6/pass**.
+With k=3, that is exactly **2 stream synchronizations per draft step**.
+
+vLLM upstream PR #55054 ("Optimize PLE MTP metadata transfers") removes exactly
+two synchronous request-index CPU->GPU transfers per Qwen4Exp MTP step by using
+`async_tensor_h2d`. The v0.29.0 source used by this project contains the same
+synchronous anchors and already imports `async_tensor_h2d`, so the delta is a
+small, clean selective-backport candidate.
+
+Upstream measured the mechanism on GB300/FP8, not CMP170HX/EXL3, so its reported
++9.877% C1 throughput is **not** used as a local performance claim. The reason
+for P0 promotion is the independent cardinality match in our own trace.
+
+Repository-side backport preparation and the hardware A/B contract live in
+`docs/R0_MTP_ASYNC_METADATA.md`.
+
+Therefore the next order is:
+
+1. A/B #55054-equivalent async metadata transfers on the qualified k=3 path.
+2. If <3% e2e, close that direction.
+3. Then choose between COOP-kernel research and dense dtype-boundary work using
+   the measured residual map.
+
+The measured Amdahl itself is unchanged.
