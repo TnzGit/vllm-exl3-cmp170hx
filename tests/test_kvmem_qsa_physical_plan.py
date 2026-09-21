@@ -77,3 +77,23 @@ def test_q2_plan_requires_page_aligned_query_boundary():
         assert "aligned" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+
+def test_cross_page_mapping_hits_1568_boundary_exactly():
+    mod = _load()
+    assert mod.map_resident_page_to_full_block(
+        97,
+        resident_page_tokens=16,
+        full_block_tokens=1568,
+    ) == (0, 1552)
+    assert mod.map_resident_page_to_full_block(
+        98,
+        resident_page_tokens=16,
+        full_block_tokens=1568,
+    ) == (1, 0)
+    assert mod.map_resident_page_to_full_block(
+        99,
+        resident_page_tokens=16,
+        full_block_tokens=1568,
+    ) == (1, 16)
