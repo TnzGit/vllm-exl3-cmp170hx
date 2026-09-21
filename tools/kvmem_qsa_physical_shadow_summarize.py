@@ -44,6 +44,9 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
     resident_table_widths = {
         int(row["resident_table_width"]) for row in stats
     }
+    resident_cache_bytes = {
+        int(row["resident_cache_bytes"]) for row in stats
+    }
     physical_geometry_ok = (
         physical_pages == {int(plan["physical_page_count"])}
         and resident_page_tokens == {int(plan["page_tokens"])}
@@ -51,6 +54,7 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
         and next(iter(full_block_tokens), 0) % int(plan["page_tokens"]) == 0
         and len(resident_table_widths) == 1
         and next(iter(resident_table_widths), 0) > int(plan["active_page0"])
+        and len(resident_cache_bytes) == 1
     )
 
     hist_total = sum(int(row["historical_selected"]) for row in stats)
@@ -105,6 +109,15 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
             "resident_page_tokens": sorted(resident_page_tokens),
             "full_block_tokens": sorted(full_block_tokens),
             "resident_table_widths": sorted(resident_table_widths),
+            "resident_cache_bytes_per_layer": sorted(resident_cache_bytes),
+            "resident_cache_mib_per_layer": (
+                next(iter(resident_cache_bytes)) / (1024**2)
+                if len(resident_cache_bytes) == 1 else None
+            ),
+            "resident_cache_gib_all_layers": (
+                next(iter(resident_cache_bytes)) * expected_layers / (1024**3)
+                if len(resident_cache_bytes) == 1 else None
+            ),
             "cross_granularity_ratio": (
                 next(iter(full_block_tokens)) / int(plan["page_tokens"])
                 if len(full_block_tokens) == 1 else None
