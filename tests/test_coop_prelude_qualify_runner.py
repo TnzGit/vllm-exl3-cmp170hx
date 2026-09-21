@@ -36,11 +36,21 @@ def test_qualify_runner_covers_long_context_and_parity():
 def test_qualify_runner_protects_installed_plugin_and_extension():
     src = RUNNER.read_text()
     assert 'git -C "$REPO" diff --quiet "$BASE_SHA" HEAD -- csrc' in src
+    assert 'SRC_DELTA="$(git -C "$REPO" diff --name-only "$BASE_SHA" HEAD -- src/vllm_exl3)"' in src
     assert 'cmp -s "$BASE_EXPECTED" "$INSTALLED_PLUGIN"' in src
     assert 'cp "$REPO/src/vllm_exl3/exl3.py" "$INSTALLED_PLUGIN"' in src
     assert "SO_SHA_BEFORE" in src
     assert "SO_SHA_AFTER" in src
     assert "restored_installed_plugin=1" in src
+
+
+def test_qualify_runner_uses_real_frozen_base_before_installing_candidate():
+    src = RUNNER.read_text()
+    base_run = src.index("BASE qualification cells: exact frozen production plugin")
+    install = src.index("install EARLY-only candidate plugin")
+    early_run = src.index("EARLY qualification cells")
+    assert base_run < install < early_run
+    assert 'PYTHONPATH="$REPO/src' in src
 
 
 def test_qualify_runner_derives_ld_library_path():
