@@ -280,6 +280,78 @@ def _kvmem_bootstrap_resident(layer, plan, full_cache, full_table):
     return cache, full_block_tokens
 
 
+def _kvmem_compare_selected_inputs(
+    plan,
+    selected_rows,
+    full_cache,
+    full_table,
+    resident_cache,
+    resident_table,
+):
+    """Byte-compare K/V payloads addressed by the same logical selected tokens."""
+
+    if full_table.shape[0] != 1 or resident_table.shape[0] != 1:
+        raise RuntimeError("K1-Q2A input compare currently requires one request")
+
+    valid = selected_rows[selected_rows >= 0].to(torch.int64)
+    if valid.numel() == 0:
+        return True, 0, None
+
+    # De-duplicate to keep the diagnostic bounded even when top-k repeats the
+    # same history token across many query rows/heads.
+    logical_tokens = torch.unique(valid)
+    full_page_tokens = int(full_cache.shape[2])
+    resident_page_tokens = int(plan["page_tokens"])
+
+    compared = 0
+    first_bad = None
+    chunk = 4096
+    for start in range(0, int(logical_tokens.numel()), chunk):
+        toks = logical_tokens[start : start + chunk]
+
+        full_logical_block = torch.div(
+            toks, full_page_tokens, rounding_mode="floor"
+        )
+        full_offset = torch.remainder(toks, full_page_tokens)
+        full_phys = full_table[0].index_select(
+            0, full_logical_block
+        ).to(torch.int64)
+
+        resident_logical_page = torch.div(
+            toks, resident_page_tokens, rounding_mode="floor"
+        )
+        resident_offset = torch.remainder(toks, resident_page_tokens)
+        resident_phys = resident_table[0].index_select(
+            0, resident_logical_page
+        ).to(torch.int64)
+
+        if bool((full_phys < 0).any().item()):
+            raise RuntimeError("full reference table misses a selected token")
+        if bool((resident_phys < 0).any().item()):
+            raise RuntimeError("resident table misses a selected token")
+
+        full_values = full_cache[
+            full_phys,
+            :,
+            full_offset,
+            :,
+        ]
+        resident_values = resident_cache[
+            resident_phys,
+            :,
+            resident_offset,
+            :,
+        ]
+        same = torch.eq(full_values, resident_values).all(dim=(1, 2))
+        compared += int(toks.numel())
+        if not bool(same.all().item()):
+            bad = int(torch.nonzero(~same, as_tuple=False)[0, 0].item())
+            first_bad = int(toks[bad].item())
+            return False, compared, first_bad
+
+    return True, compared, first_bad
+
+
 def _kvmem_active_slot_mapping(plan, positions, apply_rows, device):
     pos = positions.to(device=device, dtype=torch.int64)
     active_pos = pos[apply_rows]
@@ -404,10 +476,16 @@ def _kvmem_resident_attention(
     max_abs = float(
         (ref_rows.float() - resident_out.float()).abs().max().item()
     )
-    if not exact:
-        raise RuntimeError(
-            f"K1-Q2A resident attention mismatch max_abs={max_abs}"
+    input_exact, input_tokens_compared, first_bad_input_token = (
+        _kvmem_compare_selected_inputs(
+            plan,
+            resident_selected,
+            layer.kv_cache,
+            main_metadata.block_table,
+            resident_cache,
+            resident_table,
         )
+    )
 
     output[apply_rows] = resident_out
     applied_pos = positions.to(query.device, dtype=torch.int64)[apply_rows]
@@ -433,10 +511,26 @@ def _kvmem_resident_attention(
             "resident_cache_bytes": int(
                 resident_cache.numel() * resident_cache.element_size()
             ),
+            "input_mapping_exact": bool(input_exact),
+            "input_tokens_compared": int(input_tokens_compared),
+            "first_bad_input_token": first_bad_input_token,
             "attention_exact": exact,
             "attention_max_abs": max_abs,
         }
     )
+
+    if not input_exact:
+        raise RuntimeError(
+            "K1-Q2A resident input mapping mismatch "
+            f"first_bad_token={first_bad_input_token}"
+        )
+    if not exact and os.environ.get(
+        "VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT", "0"
+    ) != "1":
+        raise RuntimeError(
+            "K1-Q2A resident attention numerical mismatch "
+            f"max_abs={max_abs}; input_mapping_exact=true"
+        )
 
 '''
 
@@ -525,7 +619,10 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "resident_page_tokens",
         "resident_table_width",
         "resident_cache_bytes",
-        "resident attention mismatch",
+        "input_mapping_exact",
+        "input_tokens_compared",
+        "VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT",
+        "resident attention numerical mismatch",
     )
     missing = [x for x in required if x not in out]
     if missing:
