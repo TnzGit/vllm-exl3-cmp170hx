@@ -237,7 +237,8 @@ import json, sys
 d=json.load(open(sys.argv[1]))
 e=d["evidence"]
 for k in (
-    "classification","physical_shadow_go","target_correct","finish_reason",
+    "classification","physical_shadow_go","physical_mapping_go","semantic_go",
+    "target_correct","finish_reason",
     "completion_tokens","resident_budget_tokens","resident_page_count",
     "active_reserve_pages","physical_page_count"
 ):
