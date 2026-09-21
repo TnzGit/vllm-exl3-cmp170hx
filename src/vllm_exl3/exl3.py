@@ -109,6 +109,14 @@ EXL3_SUFFIXES = ("trellis", "suh", "svh", "mcg", "mul1")
 SWIGLU_LIMIT_DEFAULT = 10.0
 TEMP_ROWS_FUSED = 2048
 _COOP = os.environ.get("VLLM_EXL3_COOP", "0") == "1"
+# Diagnostic-only precision/performance probe. Default OFF.
+# For eligible BF16-input, pure-EXL3, non-lm_head dense linears, request the
+# native EXL3 FP16 epilogue instead of the plugin's historical FP32 epilogue.
+# The result is still cast back to the original BF16 dtype before returning.
+# This changes internal rounding and is NOT a production default/candidate.
+_EXL3_DENSE_FP16_OUT_PROBE = (
+    os.environ.get("VLLM_EXL3_DENSE_FP16_OUT_PROBE", "0") == "1"
+)
 try:
     FAT_EXPERT_THRESHOLD = max(0, int(os.environ.get("VLLM_EXL3_FAT_THRESHOLD", "256")))
 except (TypeError, ValueError):
@@ -3958,7 +3966,12 @@ _EXL3_RECON_MIN_ROWS = _env_int("VLLM_EXL3_RECONSTRUCT_MIN_ROWS", 17)
 _EXL3_COOP_GEMM = os.environ.get("VLLM_EXL3_COOP_GEMM", "").strip() in ("1", "true", "yes")
 
 
-def _dense_forward(linear, x_fp16: torch.Tensor) -> torch.Tensor:
+def _dense_forward(
+    linear,
+    x_fp16: torch.Tensor,
+    *,
+    out_dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
     """Dense EXL3 forward with the wedge-prone row range kept off the cooperative GEMM.
 
     exllamav3 dispatches by row count: up to 2 rows run the non-cooperative GEMV
@@ -3979,8 +3992,8 @@ def _dense_forward(linear, x_fp16: torch.Tensor) -> torch.Tensor:
     """
     rows = int(x_fp16.shape[0])
     if (not _EXL3_COOP_GEMM) and _EXL3_RECON_MIN_ROWS <= rows <= _EXL3_RECONSTRUCT_THRESHOLD:
-        return linear.forward(x_fp16, {"reconstruct": True}, out_dtype=torch.float32)
-    return linear.forward(x_fp16, {}, out_dtype=torch.float32)
+        return linear.forward(x_fp16, {"reconstruct": True}, out_dtype=out_dtype)
+    return linear.forward(x_fp16, {}, out_dtype=out_dtype)
 
 
 class Exl3LinearMethod(LinearMethodBase):
@@ -4514,6 +4527,19 @@ class Exl3LinearMethod(LinearMethodBase):
         output_sizes = layer._exl3_linear_output_partition_sizes
         n_shards = len(linears)
 
+        # Measurement probe only: isolate the output-side EXL3 dtype boundary.
+        # Keep lm_head on FP32 because its caller can itself be FP32, and keep
+        # mixed BF16/EXL3 shard layers on the historical path to avoid dtype
+        # promotion/cat confounds. Production/default remains FP32 epilogue.
+        prefix = str(getattr(layer, "_exl3_prefix", ""))
+        probe_fp16_out = (
+            _EXL3_DENSE_FP16_OUT_PROBE
+            and x_2d.dtype == torch.bfloat16
+            and not bf16_shards
+            and "lm_head" not in prefix
+        )
+        exl3_out_dtype = torch.float16 if probe_fp16_out else torch.float32
+
         # Run each shard in declared order
         outputs = []
         for i in range(n_shards):
@@ -4534,7 +4560,7 @@ class Exl3LinearMethod(LinearMethodBase):
                 linear = linears[i]
                 if linear is None:
                     raise RuntimeError(f"EXL3 linear shard {i} is None")
-                out = _dense_forward(linear, x_fp16)
+                out = _dense_forward(linear, x_fp16, out_dtype=exl3_out_dtype)
                 outputs.append(out)
 
         # Concatenate shards along output dimension
