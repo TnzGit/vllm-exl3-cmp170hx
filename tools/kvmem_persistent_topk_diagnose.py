@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import itertools
 import json
 from pathlib import Path
@@ -16,11 +17,34 @@ def _jaccard(a: set[int], b: set[int]) -> float:
     return len(a & b) / len(u) if u else 1.0
 
 
-def _run_persistent(logits: torch.Tensor, *, k: int, repeats: int) -> dict:
-    import vllm._C  # noqa: F401 - registers torch.ops._C
+def _register_persistent_topk() -> str:
+    """Load the installed vLLM extension that registers torch.ops._C.
 
-    if not hasattr(torch.ops._C, "persistent_topk"):
-        raise RuntimeError("torch.ops._C.persistent_topk is unavailable")
+    vLLM 0.29 uses _C_stable_libtorch on this installation, while older
+    builds may still expose vllm._C. Try the stable-libtorch name first and
+    retain the legacy fallback so this research tool is not tied to one wheel
+    packaging convention.
+    """
+
+    errors: list[str] = []
+    for module_name in ("vllm._C_stable_libtorch", "vllm._C"):
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            errors.append(f"{module_name}: {exc}")
+            continue
+        if hasattr(torch.ops._C, "persistent_topk"):
+            return module_name
+        errors.append(
+            f"{module_name}: imported but torch.ops._C.persistent_topk missing"
+        )
+    raise RuntimeError(
+        "unable to register torch.ops._C.persistent_topk; " + " | ".join(errors)
+    )
+
+
+def _run_persistent(logits: torch.Tensor, *, k: int, repeats: int) -> dict:
+    extension_module = _register_persistent_topk()
 
     rows, width = logits.shape
     lengths = torch.full(
@@ -64,6 +88,7 @@ def _run_persistent(logits: torch.Tensor, *, k: int, repeats: int) -> dict:
             }
         )
     return {
+        "extension_module": extension_module,
         "rows": rows,
         "width": width,
         "k": k,
