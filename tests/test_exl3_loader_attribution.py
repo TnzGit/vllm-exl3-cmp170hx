@@ -63,6 +63,7 @@ def test_loader_summary_combines_kernel_io_and_copy_wall():
         "ru_inblock": 600,
     }
     proc_watch = {
+        "pid": 123,
         "deltas": {
             "model_start_to_main_weights_done": {
                 "elapsed_s": 100.0,
@@ -82,6 +83,8 @@ def test_loader_summary_combines_kernel_io_and_copy_wall():
     }
     out = mod.summarize(startup, [first, final], proc_watch, 6.0)
     assert out["loader_attribution_valid"] is True
+    assert out["evidence_identity"]["proc_same_pid"] is True
+    assert out["evidence_identity"]["proc_window_present"] is True
     assert out["exl3_trace"]["instrumented_copy_gib"] == 30.0
     assert out["exl3_trace"]["instrumented_copy_wall_s"] == 60.0
     assert out["exl3_trace"]["raw_h2d_floor_for_instrumented_bytes_s"] == 5.0
@@ -102,3 +105,54 @@ def test_loader_summary_rejects_missing_boundaries():
         assert "missing EXL3 loader trace boundaries" in str(exc)
     else:
         raise AssertionError("expected missing-boundary failure")
+
+
+
+def test_loader_summary_rejects_proc_watcher_pid_mismatch():
+    mod = _load()
+    startup = {
+        "timings": {"main_weights_s": 10.0},
+        "checkpoint": {"checkpoint_gib": 1.0},
+    }
+    first = {
+        "tag": "FIRST_EXL3_COPY_BEFORE",
+        "pid": 123,
+        "monotonic_s": 1.0,
+        "loader_timing": {},
+        "direct_fill": {},
+        "proc_io": {},
+        "ru_minflt": 0,
+        "ru_majflt": 0,
+        "ru_inblock": 0,
+    }
+    final = {
+        "tag": "ALL_WEIGHTS_LOADED_BEFORE_POSTLOAD",
+        "pid": 123,
+        "monotonic_s": 2.0,
+        "loader_timing": {
+            "DIRECT_TRELLIS_COPY_BYTES": 1024,
+            "DIRECT_TRELLIS_COPY_WALL_S": 0.1,
+        },
+        "direct_fill": {
+            "DIRECT_FILL_CALLS": 1,
+            "DIRECT_FILL_BYTES": 1024,
+            "DIRECT_FILL_FALLBACK_CALLS": 0,
+        },
+        "proc_io": {},
+        "ru_minflt": 0,
+        "ru_majflt": 0,
+        "ru_inblock": 0,
+    }
+    proc_watch = {
+        "pid": 999,
+        "deltas": {
+            "enginecore_to_main_weights_done": {
+                "elapsed_s": 1.0,
+                "io": {},
+                "stat": {},
+            }
+        },
+    }
+    out = mod.summarize(startup, [first, final], proc_watch, 6.0)
+    assert out["loader_attribution_valid"] is False
+    assert out["evidence_identity"]["proc_same_pid"] is False
