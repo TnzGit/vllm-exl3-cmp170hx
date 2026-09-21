@@ -96,6 +96,33 @@ if [[ "$NUM_SPEC_TOKENS" != "0" ]]; then
   ARGS+=(--speculative-config "{\"method\":\"qwen4_exp_mtp\",\"num_speculative_tokens\":${NUM_SPEC_TOKENS}}")
 fi
 
+# Diagnostic-only server-side profiling. OFF unless TORCH_PROFILER_DIR is set;
+# it adds --profiler-config and therefore must never be used for performance
+# numbers. ENFORCE_EAGER additionally disables torch.compile + CUDA graphs so
+# the profiler can correlate CPU ops to kernels (attribution only).
+if [[ -n "${TORCH_PROFILER_DIR:-}" ]]; then
+  mkdir -p "$TORCH_PROFILER_DIR"
+  PROFILER_CONFIG="$(
+    python - "$TORCH_PROFILER_DIR" <<'PYEOF'
+import json, os, sys
+print(json.dumps({
+    "profiler": "torch",
+    "torch_profiler_dir": os.path.abspath(sys.argv[1]),
+    "torch_profiler_with_stack": True,
+    "torch_profiler_record_shapes": os.environ.get("TORCH_PROFILER_RECORD_SHAPES", "0") == "1",
+    "torch_profiler_with_memory": False,
+    "torch_profiler_with_flops": False,
+    "torch_profiler_use_gzip": True,
+    "ignore_frontend": True,
+}))
+PYEOF
+  )"
+  ARGS+=(--profiler-config "$PROFILER_CONFIG")
+fi
+if [[ "${ENFORCE_EAGER:-0}" == "1" ]]; then
+  ARGS+=(--enforce-eager)
+fi
+
 echo "[runtime]"
 printf '  %-28s %s\n' \
   "MODEL_DIR" "$MODEL_DIR" \
@@ -112,7 +139,12 @@ printf '  %-28s %s\n' \
   "VLLM_EXL3_GC_AFTER_MOE_LAYER" "$VLLM_EXL3_GC_AFTER_MOE_LAYER" \
   "VLLM_EXL3_COOP" "$VLLM_EXL3_COOP" \
   "VLLM_EXL3_NGRAM_TABLE" "$VLLM_EXL3_NGRAM_TABLE" \
-  "VLLM_EXL3_NGRAM_KERNEL" "$VLLM_EXL3_NGRAM_KERNEL"
+  "VLLM_EXL3_NGRAM_KERNEL" "$VLLM_EXL3_NGRAM_KERNEL" \
+  "TORCH_PROFILER_DIR" "${TORCH_PROFILER_DIR:-<off>}" \
+  "ENFORCE_EAGER" "${ENFORCE_EAGER:-0}"
+if [[ -n "${TORCH_PROFILER_DIR:-}" || "${ENFORCE_EAGER:-0}" == "1" ]]; then
+  echo "  !! PROFILING/DIAGNOSTIC MODE: latency from this run is NOT a production number"
+fi
 echo "  speculation                  ${NUM_SPEC_TOKENS} draft token(s) (0 = disabled)"
 echo "  prefix caching               disabled explicitly"
 echo "  service profile              text-only"
