@@ -20,6 +20,25 @@ def _post_json(url: str, payload: dict, timeout: int = 7200) -> dict:
         return json.load(resp)
 
 
+def normalize_case_metadata(case: dict) -> dict:
+    targets = case.get("needles")
+    if targets is None:
+        targets = case.get("target_facts", [])
+    target_tokens = case.get("target_tokens")
+    if target_tokens is None:
+        target_tokens = case.get("prompt_tokens")
+    if target_tokens is None:
+        raise ValueError("case has neither target_tokens nor prompt_tokens")
+    if "name" not in case or "query_span" not in case:
+        raise ValueError("case is missing name/query_span")
+    return {
+        "case": case["name"],
+        "target_tokens": target_tokens,
+        "query_span": case["query_span"],
+        "needles": targets,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8002)
@@ -48,19 +67,10 @@ def main() -> int:
     usage = response.get("usage") or {}
     choice = (response.get("choices") or [{}])[0]
 
-    targets = case.get("needles")
-    if targets is None:
-        targets = case.get("target_facts", [])
-    target_tokens = case.get("target_tokens")
-    if target_tokens is None:
-        target_tokens = case.get("prompt_tokens")
-
+    meta = normalize_case_metadata(case)
     out = {
         "schema": 1,
-        "case": case["name"],
-        "target_tokens": target_tokens,
-        "query_span": case["query_span"],
-        "needles": targets,
+        **meta,
         "wall_s": round(wall, 6),
         "usage": usage,
         "finish_reason": choice.get("finish_reason"),
