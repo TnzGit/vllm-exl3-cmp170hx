@@ -3966,6 +3966,23 @@ _EXL3_RECON_MIN_ROWS = _env_int("VLLM_EXL3_RECONSTRUCT_MIN_ROWS", 17)
 _EXL3_COOP_GEMM = os.environ.get("VLLM_EXL3_COOP_GEMM", "").strip() in ("1", "true", "yes")
 
 
+def _dense_output_probe_dtype(
+    layer,
+    x_2d: torch.Tensor,
+    bf16_shards: list[int],
+) -> torch.dtype:
+    """Return diagnostic EXL3 output dtype without changing production default."""
+    prefix = str(getattr(layer, "_exl3_prefix", ""))
+    if (
+        _EXL3_DENSE_FP16_OUT_PROBE
+        and x_2d.dtype == torch.bfloat16
+        and not bf16_shards
+        and "lm_head" not in prefix
+    ):
+        return torch.float16
+    return torch.float32
+
+
 def _dense_forward(
     linear,
     x_fp16: torch.Tensor,
@@ -4531,14 +4548,9 @@ class Exl3LinearMethod(LinearMethodBase):
         # Keep lm_head on FP32 because its caller can itself be FP32, and keep
         # mixed BF16/EXL3 shard layers on the historical path to avoid dtype
         # promotion/cat confounds. Production/default remains FP32 epilogue.
-        prefix = str(getattr(layer, "_exl3_prefix", ""))
-        probe_fp16_out = (
-            _EXL3_DENSE_FP16_OUT_PROBE
-            and x_2d.dtype == torch.bfloat16
-            and not bf16_shards
-            and "lm_head" not in prefix
+        exl3_out_dtype = _dense_output_probe_dtype(
+            layer, x_2d, bf16_shards
         )
-        exl3_out_dtype = torch.float16 if probe_fp16_out else torch.float32
 
         # Run each shard in declared order
         outputs = []
