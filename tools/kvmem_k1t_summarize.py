@@ -13,6 +13,7 @@ def summarize(probe: dict, reference_gib_s: float) -> dict:
         raise ValueError("reference_gib_s must be positive")
 
     stage = probe["transition"]
+    geometry = probe["geometry"]
     h2d = probe["h2d_stage_in"]
     verify = probe["byte_verification"]
     table = probe["qsa_page_table"]
@@ -32,6 +33,10 @@ def summarize(probe: dict, reference_gib_s: float) -> dict:
     else:
         perf_class = "HIGH_TRANSFER_OVERHEAD"
 
+    expected_stage_in_pages = (
+        12 * int(geometry["pages_per_region"])
+    )
+
     correctness_go = bool(
         verify["all_repeats_exact"]
         and table["all_stage_in_mappings_exact"]
@@ -39,7 +44,7 @@ def summarize(probe: dict, reference_gib_s: float) -> dict:
         and backing["all_keys_hit_after_store"]
         and int(stage["stage_in_bytes"]) == 72 * 1024 * 1024
         and int(stage["query_replacements_regions"]) == 12
-        and int(stage["stage_in_pages"]) == 192
+        and int(stage["stage_in_pages"]) == expected_stage_in_pages
     )
 
     return {
@@ -47,6 +52,7 @@ def summarize(probe: dict, reference_gib_s: float) -> dict:
         "transfer_correctness_go": correctness_go,
         "reference_raw_h2d_gib_s": reference_gib_s,
         "stage_in_gib": gib,
+        "expected_stage_in_pages": expected_stage_in_pages,
         "raw_copy_floor_ms": raw_floor_ms,
         "median_worker_event_ms": event_ms,
         "median_submit_wait_wall_ms": wall_ms,
