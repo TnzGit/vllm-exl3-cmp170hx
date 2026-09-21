@@ -60,16 +60,24 @@ def test_c_both_authoritative_paths_agree():
     assert _tpot(decode_s, usage_completion) == _tpot(decode_s, derived)
 
 
-def test_denominator_mismatch_marks_cell_invalid():
-    """A real disagreement between the two sources must invalidate the cell."""
-    # drafts+accepted counts the trailing bonus target token once more than the
-    # API when the last pass ends on a rejection, so +-1 is acceptable.
-    def consistent(derived, usage_ct):
-        return abs(derived - usage_ct) <= 1
+def test_denominator_boundary_contract_for_k3():
+    """Initial-target and final-truncation offsets are valid for k=3."""
+    def consistent(derived, usage_ct, k):
+        delta = derived - usage_ct
+        return -1 <= delta <= k
 
-    assert consistent(256, 256) is True      # exact match
-    assert consistent(257, 256) is True      # boundary bonus token
-    assert consistent(250, 256) is False     # genuine disagreement -> INVALID
+    assert consistent(256, 256, 3) is True   # exact match
+    assert consistent(255, 256, 3) is True   # initial target before first spec pass
+    assert consistent(259, 256, 3) is True   # final pass truncated by max_tokens
+    assert consistent(254, 256, 3) is False  # too few counter-derived tokens
+    assert consistent(260, 256, 3) is False  # too many for k=3 truncation
+
+
+def test_cell_implements_boundary_range_from_measured_k():
+    src = (Path(__file__).resolve().parents[1] / "tools" / "r0_k3_cell.py").read_text()
+    assert "spec_k" in src
+    assert "int(round(d_dtok / d_drafts))" in src
+    assert "-1 <= counter_delta <= spec_k" in src
 
 
 def test_cell_reports_usage_based_tpot():
