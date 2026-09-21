@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # K1-Q2B: real-Qwen CPU-backed resident-cache diagnostic.
 # Full scheduler-owned QSA KV remains allocated as source/reference. A separate
-# bounded 64K resident physical cache is bootstrapped D2D and used for affected
+# bounded 64K resident physical cache is populated through generic CPU offload
+# (chunked D2H publication + real H2D stage-in) and used for affected
 # query/decode attention rows. Selected K/V payload mapping must be byte-exact.
 # Attention exactness is measured separately because PAGE_SIZE specialization
 # can change floating evaluation order even when addressed K/V bytes are equal.
@@ -131,7 +132,7 @@ if [[ -n "$GPU_PIDS" ]]; then
   exit 2
 fi
 
-for marker in   '# KVMEM_QSA_CPU_BACKED_V1'   '# KVMEM_QSA_RESIDENT_VISIBILITY_V1'   '# KVMEM_QSA_SHADOW_V1'; do
+for marker in   '# KVMEM_QSA_CPU_BACKED_V1'   '# KVMEM_QSA_PHYSICAL_SHADOW_V1'   '# KVMEM_QSA_RESIDENT_VISIBILITY_V1'   '# KVMEM_QSA_SHADOW_V1'; do
   if grep -Fq "$marker" "$QSA"; then
     echo "REFUSE: installed QSA contains stale research marker: $marker" >&2
     exit 2
@@ -208,7 +209,7 @@ echo "=== exact-token semantic request ==="
 guard_idle
 
 if [[ ! -s "$STATS" ]]; then
-  echo "ERROR: physical stats are empty" >&2
+  echo "ERROR: CPU-backed stats are empty" >&2
   exit 3
 fi
 
@@ -251,6 +252,7 @@ for k in (
     "bootstrap_pages_compared_by_layer","first_bad_bootstrap_pages",
     "page_size_bytes","expected_bytes_per_layer","d2h_publish_bytes_by_layer",
     "h2d_stage_in_bytes_by_layer","d2h_publish_jobs_by_layer",
+    "expected_publish_jobs_per_layer","transfer_tensor_geometry_ok",
     "d2h_total_gib","h2d_total_gib","d2h_event_seconds_sum_layers",
     "d2h_wall_seconds_sum_layers","h2d_event_seconds_sum_layers",
     "h2d_wall_seconds_sum_layers","bootstrap_sources",
