@@ -115,8 +115,10 @@ request to bulk-backport current vLLM main.
   changing other MTP code.
 - **#55054 (merged after v0.29.0): async PLE MTP metadata transfers.** Reported
   removal of two per-step stream synchronizations and sizable C1 gains on
-  newer Qwen code. Treat as a high-value R1/selective-backport candidate only
-  after the R0 MTP baseline is measured.
+  newer Qwen code. **R0 MTP is now qualified and the local k=3 trace independently
+  shows exactly 6 `cudaStreamSynchronize` calls/pass = 2 per draft step, so this
+  candidate is promoted to the immediate selective-backport P0.** See
+  `R0_MTP_ASYNC_METADATA.md` for the local A/B contract.
 
 ### Prefix-cache / multi-request / PP gates, not first-boot blockers
 
