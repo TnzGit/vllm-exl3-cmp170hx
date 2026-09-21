@@ -21,11 +21,34 @@ def _load_jsonl(path: Path) -> list[dict]:
 def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
     layers = sorted({str(row["layer_name"]) for row in stats})
     expected_layers = int(plan["expected_qsa_layers"])
-    attention_exact = bool(stats) and all(bool(row["attention_exact"]) for row in stats)
+    attention_exact = bool(stats) and all(
+        bool(row["attention_exact"]) for row in stats
+    )
     max_abs = max(
         (float(row["attention_max_abs"]) for row in stats),
         default=float("inf"),
     )
+    mean_abs_max = max(
+        (float(row["attention_mean_abs"]) for row in stats),
+        default=float("inf"),
+    )
+    mismatch_elements = sum(
+        int(row["attention_mismatch_elements"]) for row in stats
+    )
+    attention_elements = sum(
+        int(row["attention_elements"]) for row in stats
+    )
+    input_mapping_exact = bool(stats) and all(
+        bool(row["input_mapping_exact"]) for row in stats
+    )
+    input_tokens_compared = sum(
+        int(row["input_tokens_compared"]) for row in stats
+    )
+    first_bad_input_tokens = [
+        int(row["first_bad_input_token"])
+        for row in stats
+        if row.get("first_bad_input_token") is not None
+    ]
     bootstrap_pages = {
         str(row["layer_name"]): int(row["bootstrap_pages"]) for row in stats
     }
@@ -66,24 +89,36 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
 
     target_correct = bool(response.get("target_codes_in_order"))
     semantic_complete = response.get("finish_reason") == "stop"
-    go = bool(
-        target_correct
-        and semantic_complete
-        and attention_exact
-        and max_abs == 0.0
+
+    mapping_gate = bool(
+        input_mapping_exact
         and bootstrap_ok
         and physical_geometry_ok
         and accounting_ok
         and exercised
         and layer_coverage_ok
     )
+    semantic_gate = bool(target_correct and semantic_complete)
+
+    if not mapping_gate:
+        classification = "Q2A_INPUT_MAPPING_NO_GO"
+        go = False
+    elif not semantic_gate:
+        classification = "Q2A_SEMANTIC_NO_GO"
+        go = False
+    elif attention_exact and max_abs == 0.0:
+        classification = "Q2A_PHYSICAL_EXACT_GO"
+        go = True
+    else:
+        classification = "Q2A_MAPPING_EXACT_SEMANTIC_GO_NONEXACT"
+        go = True
 
     return {
         "schema": 1,
-        "classification": (
-            "Q2A_PHYSICAL_EXACT_GO" if go else "Q2A_PHYSICAL_NO_GO"
-        ),
+        "classification": classification,
         "physical_shadow_go": go,
+        "mapping_gate": mapping_gate,
+        "semantic_gate": semantic_gate,
         "target_correct": target_correct,
         "finish_reason": response.get("finish_reason"),
         "completion_tokens": int(
@@ -103,6 +138,16 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
             "layer_coverage_ok": layer_coverage_ok,
             "attention_exact_all_records": attention_exact,
             "attention_max_abs": max_abs,
+            "attention_mean_abs_max_record": mean_abs_max,
+            "attention_mismatch_elements": mismatch_elements,
+            "attention_elements": attention_elements,
+            "attention_mismatch_fraction": (
+                mismatch_elements / attention_elements
+                if attention_elements else 0.0
+            ),
+            "input_mapping_exact_all_records": input_mapping_exact,
+            "input_tokens_compared": input_tokens_compared,
+            "first_bad_input_tokens": first_bad_input_tokens,
             "bootstrap_pages_by_layer": bootstrap_pages,
             "bootstrap_ok": bootstrap_ok,
             "physical_geometry_ok": physical_geometry_ok,
@@ -133,8 +178,12 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
         },
         "note": (
             "Q2A keeps the scheduler-owned full KV cache allocated and uses it "
-            "as bootstrap/reference. GO proves physical resident-page remapping "
-            "and active-suffix writes, not GPU-memory reduction."
+            "as bootstrap/reference. The hard remap gate is byte-exact selected "
+            "K/V input equivalence. Attention may be numerically non-exact when "
+            "the same inputs execute through different PAGE_SIZE-specialized "
+            "Triton kernels; that is classified separately and still requires "
+            "the final target answer to remain correct. No GPU-memory reduction "
+            "is claimed."
         ),
     }
 
