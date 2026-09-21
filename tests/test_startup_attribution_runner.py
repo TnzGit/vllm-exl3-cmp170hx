@@ -16,9 +16,11 @@ def test_startup_runner_shell_syntax():
     assert run.returncode == 0, run.stderr
 
 
-def test_startup_runner_does_two_identical_health_only_boots():
+def test_startup_runner_does_4k_current_4k_warm_and_161k_warm_health_boots():
     src = RUNNER.read_text()
-    assert "for RUN in 1 2" in src
+    assert 'run_boot 1 "4k_current" "$SHORT_MAXLEN"' in src
+    assert 'run_boot 2 "4k_warm" "$SHORT_MAXLEN"' in src
+    assert 'run_boot 3 "161k_warm" "$LONG_MAXLEN"' in src
     assert "/health" in src
     assert "/v1/models" in src
     assert "/v1/completions" not in src
@@ -31,12 +33,27 @@ def test_startup_runner_preserves_production_weight_path_defaults():
     assert 'NUM_SPEC_TOKENS:-3' in src
     assert "VLLM_EXL3_COOP=1" in src
     assert "serve_cmp170hx_qwen_firstboot.sh" in src
-    assert 'MAX_MODEL_LEN:-4096' in src
+    assert 'STARTUP_SHORT_MAX_MODEL_LEN:-4096' in src
+    assert 'STARTUP_LONG_MAX_MODEL_LEN:-161000' in src
 
 
-def test_startup_runner_outputs_nested_phase_comparison():
+def test_startup_runner_outputs_cache_and_long_context_comparisons():
     src = RUNNER.read_text()
-    assert "startup_run1.json" in src
-    assert "startup_run2.json" in src
+    assert "startup_4k_current.json" in src
+    assert "startup_4k_warm.json" in src
+    assert "startup_161k_warm.json" in src
     assert "startup_comparison.json" in src
-    assert "large_weight_time_drop_on_run2" in src
+    assert "cache_effect_4k" in src
+    assert "long_context_effect_warm" in src
+    assert "large_4k_weight_time_drop_when_warm" in src
+    assert "long_context_added_engine_init_s" in src
+
+
+def test_startup_runner_keeps_health_and_safety_evidence():
+    src = RUNNER.read_text()
+    assert "xid_before=" in src
+    assert "xid_after=" in src
+    assert "xid_delta=" in src
+    assert "gpu_processes=" in src
+    assert "vllm_processes=" in src
+    assert "port_$PORT=" in src
