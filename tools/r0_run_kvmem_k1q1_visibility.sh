@@ -15,6 +15,7 @@ OUT="${1:-$R/results/kvmem-k1q1-visibility}"
 PORT="${PORT:-8002}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
+MAXTOK="${K1Q1_MAX_TOKENS:-512}"
 
 export CUDA_HOME="${CUDA_HOME:-$V/lib/python3.12/site-packages/nvidia/cu13}"
 export PATH="$CUDA_HOME/bin:$V/bin:$PATH"
@@ -137,6 +138,7 @@ echo "qsa=$QSA"
 echo "model=$MODEL_DIR"
 echo "k1a=$K1A_DIR"
 echo "k1b=$K1B_DIR"
+echo "max_tokens=$MAXTOK"
 
 test -f "$QSA"
 test -f "$MODEL_DIR/config.json"
@@ -204,14 +206,14 @@ echo "xid_before=$XID0"
 echo "=== baseline full-QSA replay ==="
 start_engine baseline "$OUT/logs/serve_baseline.log"
 guard_idle
-"$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py"   --port "$PORT" --case "$TURN_FILE" --max-tokens 32   --out "$OUT/baseline_response.json"   | tee "$OUT/baseline_response.stdout.json"
+"$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py"   --port "$PORT" --case "$TURN_FILE" --max-tokens "$MAXTOK"   --out "$OUT/baseline_response.json"   | tee "$OUT/baseline_response.stdout.json"
 guard_idle
 stop_engine
 
 echo "=== masked 64K/5% sticky-resident replay ==="
 start_engine masked "$OUT/logs/serve_masked.log"
 guard_idle
-"$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py"   --port "$PORT" --case "$TURN_FILE" --max-tokens 32   --out "$OUT/masked_response.json"   | tee "$OUT/masked_response.stdout.json"
+"$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py"   --port "$PORT" --case "$TURN_FILE" --max-tokens "$MAXTOK"   --out "$OUT/masked_response.json"   | tee "$OUT/masked_response.stdout.json"
 guard_idle
 stop_engine
 
@@ -250,6 +252,8 @@ print("classification=", d["classification"])
 print("semantic_go=", d["semantic_go"])
 print("baseline_target_correct=", d["baseline_target_correct"])
 print("masked_target_correct=", d["masked_target_correct"])
+print("baseline_measurement_valid=", d["baseline_measurement_valid"])
+print("evidence_valid=", d["evidence_valid"])
 print("exact_text_parity=", d["exact_text_parity"])
 print("exact_token_parity=", d["exact_token_parity"])
 v = d["visibility"]
