@@ -67,3 +67,15 @@ def test_probe_primary_geometry_is_explicit():
     assert 'default=2' in src
     assert 'default=256' in src
     assert 'default=2' in src
+
+
+
+def test_single_tensor_factory_builds_real_model_canonical_page_contract():
+    src = ADAPTER.read_text()
+    assert "def single_tensor_cpu_backing(" in src
+    assert "CanonicalKVCaches(" in src
+    assert "CanonicalKVCacheTensor(" in src
+    assert "CanonicalKVCacheRef(" in src
+    assert "tensor.is_contiguous()" in src
+    assert "actual_page_bytes" in src
+    assert "VllmCPUPageBacking(" in src
