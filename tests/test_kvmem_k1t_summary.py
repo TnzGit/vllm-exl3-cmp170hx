@@ -16,6 +16,7 @@ def _load():
 
 def _probe(wall_ms=12.0, event_ms=11.5):
     return {
+        "geometry": {"pages_per_region": 16},
         "transition": {
             "stage_in_gib": 72 / 1024,
             "stage_in_bytes": 72 * 1024 * 1024,
@@ -40,6 +41,7 @@ def test_summary_correctness_go_and_close_to_floor():
     out = mod.summarize(_probe(), 6.3494)
     assert out["transfer_correctness_go"] is True
     assert out["performance_class"] == "CLOSE_TO_RAW_FLOOR"
+    assert out["expected_stage_in_pages"] == 192
     assert 10.0 < out["raw_copy_floor_ms"] < 12.5
 
 
