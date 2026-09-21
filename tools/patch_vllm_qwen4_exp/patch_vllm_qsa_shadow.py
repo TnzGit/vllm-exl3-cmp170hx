@@ -36,7 +36,6 @@ HELPER = r'''from .indexer_qsa import QSAIndexer
 def _kvmem_qsa_shadow_record(
     *,
     layer_name: str,
-    layer_id: int,
     selected: torch.Tensor,
     logical_positions: torch.Tensor,
     skip_topk: bool,
@@ -97,7 +96,6 @@ def _kvmem_qsa_shadow_record(
         "schema": 1,
         "pid": os.getpid(),
         "layer_name": str(layer_name),
-        "layer_id": int(layer_id),
         "skip_topk": bool(skip_topk),
         "num_rows_total": int(selected.shape[0]),
         "output_width": int(selected.shape[1]),
@@ -121,7 +119,6 @@ CALL_ANCHOR = """        if selected.shape != (
 """
 CALL_BLOCK = CALL_ANCHOR + """        _kvmem_qsa_shadow_record(
             layer_name=self.layer_name,
-            layer_id=self.layer_id,
             selected=selected,
             logical_positions=side_metadata.logical_positions[:num_tokens],
             skip_topk=self.indexer.skip_topk,
@@ -156,6 +153,10 @@ def patch(path: Path, *, check_only: bool = False) -> str:
     missing = [token for token in required if token not in patched]
     if missing:
         raise RuntimeError(f"QSA shadow postcondition missing: {missing}")
+    if "self.layer_id" in patched:
+        raise RuntimeError(
+            "QSA shadow patch must not depend on Qwen4ExpQSAAttention.self.layer_id"
+        )
 
     if check_only:
         compile(patched, str(path), "exec")
