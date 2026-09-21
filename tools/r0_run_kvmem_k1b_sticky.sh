@@ -59,8 +59,16 @@ PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$R
 echo "=== sticky replay over existing K1A shadows ==="
 "$V/bin/python" "$REPO/tools/kvmem_qsa_sticky_replay.py"   --manifest "$K1A_DIR/turns/manifest.json"   --shadow-dir "$K1A_DIR/shadows"   --model-config "$MODEL_DIR/config.json"   --out "$OUT/k1b_sticky_summary.json"   | tee "$OUT/k1b_sticky_summary.stdout.json"
 
-echo "=== SM80 persistent-topk tie diagnostic ==="
+echo "=== GPU microdiagnostics ==="
 XID0=$(xid_now); XID0=${XID0:-0}
+
+echo "--- pinned H2D bandwidth ---"
+"$V/bin/python" "$REPO/tools/kvmem_h2d_bandwidth.py" \
+  --sizes-mib 64 256 512 --repeats 15 \
+  --out "$OUT/h2d_bandwidth.json" \
+  | tee "$OUT/h2d_bandwidth.stdout.json"
+
+echo "--- SM80 persistent-topk tie diagnostic ---"
 "$V/bin/python" "$REPO/tools/kvmem_persistent_topk_diagnose.py"   --rows 8 --width 60000 --k 512 --repeats 30   --out "$OUT/persistent_topk_diagnosis.json"   | tee "$OUT/persistent_topk_diagnosis.stdout.json"
 XID1=$(xid_now); XID1=${XID1:-0}
 echo "xid_before=$XID0 xid_after=$XID1 xid_delta=$((XID1-XID0))"
