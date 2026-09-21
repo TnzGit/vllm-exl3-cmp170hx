@@ -16,11 +16,13 @@ def test_moe_wide_runner_attests_installed_plugin_before_gpu():
 
 def test_moe_wide_runner_compares_auto_and_forced_narrow():
     src = RUNNER.read_text()
-    assert "env_cmd+=(-u EXL3_MOE_COOP_WIDE)" in src
-    assert "env_cmd+=(EXL3_MOE_COOP_WIDE=0)" in src
+    assert "env_unset+=(-u EXL3_MOE_COOP_WIDE)" in src
+    assert "env_vars+=(EXL3_MOE_COOP_WIDE=0)" in src
     assert "capture_trace auto" in src
     assert "capture_trace narrow" in src
     assert "r0_moe_wide_compare.py" in src
+    assert 'env "${env_unset[@]}" "${env_vars[@]}"' in src
+    assert "<<'PY' | tee \"$OUT/perf_summary.json\"" in src
 
 
 def test_moe_wide_runner_never_patches_or_rebuilds_exllamav3():
