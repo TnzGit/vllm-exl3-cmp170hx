@@ -122,6 +122,14 @@ echo "vllm_root=$VLLM_ROOT"
 echo "qsa=$QSA"
 echo "model=$MODEL_DIR"
 test -f "$QSA"
+if grep -Fq '# KVMEM_QSA_SHADOW_V1' "$QSA"; then
+  echo "REFUSE: installed QSA source is already shadow-patched" >&2
+  exit 2
+fi
+if [[ -e "$QSA.kvmem_qsa_shadow.orig" ]]; then
+  echo "REFUSE: stale QSA shadow backup exists beside installed source" >&2
+  exit 2
+fi
 
 QSA_SHA_BEFORE=$(sha256sum "$QSA" | awk '{print $1}')
 echo "qsa_sha256_before=$QSA_SHA_BEFORE"
