@@ -897,6 +897,105 @@ def direct_fill_stats() -> dict[str, Any]:
     return dict(_DIRECT_FILL_STATS)
 
 
+# Diagnostic-only loader timing. Disabled unless VLLM_EXL3_LOAD_TRACE_PATH is
+# set, so the production path pays only one environment lookup at module load.
+_LOAD_TRACE_PATH = os.environ.get("VLLM_EXL3_LOAD_TRACE_PATH", "").strip()
+_LOAD_TIMING_STATS: dict[str, Any] = {
+    "GENERIC_COPY_CALLS": 0,
+    "GENERIC_COPY_BYTES": 0,
+    "GENERIC_COPY_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PREP_CALLS": 0,
+    "DIRECT_TRELLIS_PREP_BYTES": 0,
+    "DIRECT_TRELLIS_PREP_WALL_S": 0.0,
+    "DIRECT_TRELLIS_COPY_CALLS": 0,
+    "DIRECT_TRELLIS_COPY_BYTES": 0,
+    "DIRECT_TRELLIS_COPY_WALL_S": 0.0,
+}
+_LOAD_TRACE_STARTED = False
+_LOAD_TRACE_FINAL_WRITTEN = False
+
+
+def loader_timing_stats() -> dict[str, Any]:
+    return dict(_LOAD_TIMING_STATS)
+
+
+def _proc_io_snapshot() -> dict[str, int]:
+    out: dict[str, int] = {}
+    try:
+        with open("/proc/self/io", encoding="utf-8") as fh:
+            for line in fh:
+                key, _, value = line.partition(":")
+                key = key.strip()
+                if key in {
+                    "rchar",
+                    "wchar",
+                    "syscr",
+                    "syscw",
+                    "read_bytes",
+                    "write_bytes",
+                    "cancelled_write_bytes",
+                }:
+                    out[key] = int(value.strip())
+    except OSError:
+        pass
+    return out
+
+
+def _load_trace_record(tag: str, layer: Any | None = None) -> None:
+    if not _LOAD_TRACE_PATH:
+        return
+    import resource
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    rec: dict[str, Any] = {
+        "schema": 1,
+        "tag": tag,
+        "pid": os.getpid(),
+        "time_s": time.time(),
+        "monotonic_s": time.monotonic(),
+        "ru_minflt": int(usage.ru_minflt),
+        "ru_majflt": int(usage.ru_majflt),
+        "ru_inblock": int(usage.ru_inblock),
+        "ru_oublock": int(usage.ru_oublock),
+        "proc_io": _proc_io_snapshot(),
+        "direct_fill": direct_fill_stats(),
+        "loader_timing": loader_timing_stats(),
+    }
+    if layer is not None:
+        rec["layer"] = str(
+            getattr(layer, "layer_name", None)
+            or getattr(layer, "prefix", None)
+            or type(layer).__name__
+        )
+    try:
+        with open(_LOAD_TRACE_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _load_trace_start() -> None:
+    global _LOAD_TRACE_STARTED
+    if not _LOAD_TRACE_PATH or _LOAD_TRACE_STARTED:
+        return
+    _LOAD_TRACE_STARTED = True
+    _load_trace_record("FIRST_EXL3_COPY_BEFORE")
+
+
+def _load_trace_weights_complete(layer: Any | None = None) -> None:
+    """Write one exact cumulative snapshot after vLLM has loaded all weights.
+
+    vLLM calls quant_method.process_weights_after_loading only after model
+    load_weights has finished, so the first EXL3 post-load hook is a clean
+    boundary for all EXL3 copy counters without per-tensor file I/O.
+    """
+    global _LOAD_TRACE_FINAL_WRITTEN
+    if not _LOAD_TRACE_PATH or _LOAD_TRACE_FINAL_WRITTEN:
+        return
+    _LOAD_TRACE_FINAL_WRITTEN = True
+    _load_trace_record("ALL_WEIGHTS_LOADED_BEFORE_POSTLOAD", layer)
+
+
 def _find_containing_vma(addr: int) -> tuple[int, int, str] | None:
     """Return (vma_start, vma_end, pathname) for addr from /proc/self/maps."""
     try:
@@ -987,7 +1086,15 @@ def _copy_weight_blocking(dest: "torch.Tensor", src: "torch.Tensor") -> None:
     suh/svh or dense EXL3 copy only serializes the loader. File-backed CPU
     pages are reclaimed after the blocking copy returns.
     """
+    _load_trace_start()
+    nbytes = int(src.numel()) * int(src.element_size())
+    t0 = time.perf_counter()
     dest.copy_(src, non_blocking=False)
+    elapsed = time.perf_counter() - t0
+    if _LOAD_TRACE_PATH:
+        _LOAD_TIMING_STATS["GENERIC_COPY_CALLS"] += 1
+        _LOAD_TIMING_STATS["GENERIC_COPY_BYTES"] += nbytes
+        _LOAD_TIMING_STATS["GENERIC_COPY_WALL_S"] += elapsed
     _madv_dontneed_cpu_tensor(src)
 
 
@@ -1020,15 +1127,27 @@ def _direct_fill_trellis_slot(
     # PR14's direct H2D copy, kept separate from its broader policy changes.
     # Keep conversion on the source device; never allocate src.to(cuda) beside
     # the final arena. Blocking copy establishes completion before release.
+    _load_trace_start()
+    prep_t0 = time.perf_counter()
     if src.dtype != torch.int16:
         src = src.to(dtype=torch.int16)
     if not src.is_contiguous():
         src = src.contiguous()
+    prep_elapsed = time.perf_counter() - prep_t0
+    copy_t0 = time.perf_counter()
     arena[idx].copy_(src, non_blocking=False)
+    copy_elapsed = time.perf_counter() - copy_t0
     _madv_dontneed_cpu_tensor(src)
     _DIRECT_FILL_STATS["DIRECT_FILL_CALLS"] += 1
     _DIRECT_FILL_STATS["DIRECT_FILL_BYTES"] += transient
     _DIRECT_FILL_STATS["DIRECT_FILL_DEVICE"] = str(arena.device)
+    if _LOAD_TRACE_PATH:
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_PREP_CALLS"] += 1
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_PREP_BYTES"] += transient
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_PREP_WALL_S"] += prep_elapsed
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_CALLS"] += 1
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_BYTES"] += transient
+        _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_WALL_S"] += copy_elapsed
 
 
 def _pack_trellis_arenas(layer: Any) -> dict[str, Any]:
@@ -3128,6 +3247,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
         return True if return_success else None
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        _load_trace_weights_complete(layer)
         store = getattr(layer, "_exl3_mixed_store", None)
         if store is not None:
             layer._exl3_inners = store.build_inners(make_linear_exl3)
@@ -4377,6 +4497,7 @@ class Exl3LinearMethod(LinearMethodBase):
         return weight_loader
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        _load_trace_weights_complete(layer)
         if not hasattr(layer, "trellis"):
             return
 
