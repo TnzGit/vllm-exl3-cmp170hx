@@ -131,6 +131,13 @@ if ! git -C "$REPO" diff --quiet "$BASE_SHA" HEAD -- csrc; then
   exit 2
 fi
 
+SRC_DELTA="$(git -C "$REPO" diff --name-only "$BASE_SHA" HEAD -- src/vllm_exl3)"
+if [[ "$SRC_DELTA" != "src/vllm_exl3/exl3.py" ]]; then
+  echo "REFUSE: qualification source delta is not isolated to src/vllm_exl3/exl3.py" >&2
+  echo "$SRC_DELTA" >&2
+  exit 2
+fi
+
 if grep -q 'VLLM_EXL3_COOP_OUT_EMPTY' "$REPO/src/vllm_exl3/exl3.py"; then
   echo "REFUSE: rejected OUT_EMPTY probe is still present in candidate source." >&2
   exit 2
@@ -156,9 +163,6 @@ fi
 
 PLUGIN_BACKUP="$OUT/exl3_installed_backup.py"
 cp "$INSTALLED_PLUGIN" "$PLUGIN_BACKUP"
-cp "$REPO/src/vllm_exl3/exl3.py" "$INSTALLED_PLUGIN"
-"$V/bin/python" -m py_compile "$INSTALLED_PLUGIN"
-cmp -s "$REPO/src/vllm_exl3/exl3.py" "$INSTALLED_PLUGIN"
 
 SO_PATH="$("$V/bin/python" - <<'PY'
 import torch
@@ -175,11 +179,13 @@ echo "=== CPU gates ==="
   "$REPO/tools/r0_k3_cell.py" \
   "$REPO/tools/r0_k3_parity_recheck.py" \
   "$REPO/tools/r0_coop_prelude_qualify_summary.py"
+PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
 "$V/bin/python" -m pytest -q \
   "$REPO/tests/test_coop_early_prelude.py" \
   "$REPO/tests/test_mtp_denominator_contract.py" \
   "$REPO/tests/test_moe_coop_expert_range.py" \
-  "$REPO/tests/test_coop_prelude_qualify_runner.py"
+  "$REPO/tests/test_coop_prelude_qualify_runner.py" \
+  "$REPO/tests/test_mtp_inline_parity_contract.py"
 
 XID0=$(xid_now); XID0=${XID0:-0}
 
@@ -221,8 +227,15 @@ run_config() {
   stop_engine
 }
 
-echo "=== BASE qualification cells ==="
+echo "=== BASE qualification cells: exact frozen production plugin ==="
+cmp -s "$BASE_EXPECTED" "$INSTALLED_PLUGIN"
 run_config base base "$OUT/serve_base.log"
+
+echo "=== install EARLY-only candidate plugin ==="
+cp "$REPO/src/vllm_exl3/exl3.py" "$INSTALLED_PLUGIN"
+"$V/bin/python" -m py_compile "$INSTALLED_PLUGIN"
+cmp -s "$REPO/src/vllm_exl3/exl3.py" "$INSTALLED_PLUGIN"
+echo "installed_candidate_sha256=$(sha256sum "$INSTALLED_PLUGIN" | awk '{print $1}')"
 
 echo "=== EARLY qualification cells ==="
 run_config early early "$OUT/serve_early.log"
