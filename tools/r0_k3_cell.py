@@ -260,8 +260,19 @@ def main() -> int:
         if not ref_tokens:
             rc = (ref.get("cells") or [{}])[0]
             ref_tokens = rc.get("token_pieces")
-        got = cells[0]["token_pieces"]
-        if ref_tokens is None:
+
+        def _flatten_token_pieces(seq):
+            flat = []
+            for piece in seq or []:
+                if isinstance(piece, list):
+                    flat.extend(piece)
+                else:
+                    flat.append(piece)
+            return flat
+
+        ref_tokens = _flatten_token_pieces(ref_tokens)
+        got = _flatten_token_pieces(cells[0]["token_pieces"])
+        if not ref_tokens:
             result["parity"] = {"status": "NO_REFERENCE_TOKENS"}
         else:
             n = min(len(ref_tokens), len(got))
