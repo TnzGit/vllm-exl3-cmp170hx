@@ -29,7 +29,7 @@ def test_runner_never_starts_model_or_patches_installed_source():
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert not any(
-        re.search(r"(^|[;&|])\\s*(?:setsid\\s+)?(?:[^#]*\\s)?vllm\\s+serve(?:\\s|$)", line)
+        re.search(r"(^|[;&|])\s*(?:setsid\s+)?(?:[^#]*\s)?vllm\s+serve(?:\s|$)", line)
         and "pgrep" not in line
         and "grep" not in line
         for line in executable_lines
