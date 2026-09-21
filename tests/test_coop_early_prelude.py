@@ -53,7 +53,6 @@ def test_early_coop_default_off(monkeypatch):
 def test_early_coop_calls_same_kernel_for_decode_shape(monkeypatch):
     monkeypatch.setattr(exl3, "_COOP", True)
     monkeypatch.setattr(exl3, "_COOP_EARLY_PRELUDE", True)
-    monkeypatch.setattr(exl3, "_COOP_OUT_EMPTY", False)
     monkeypatch.setattr(exl3, "FAT_EXPERT_THRESHOLD", 256)
 
     ext = FakeExt()
