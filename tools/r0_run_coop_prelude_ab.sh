@@ -286,8 +286,10 @@ PY
 )"
 if [[ "$BEST_MODE" != "none" ]]; then
   echo "=== 160K sentinel for $BEST_MODE ==="
+  RUN_MODE="$BEST_MODE"
+  [[ "$RUN_MODE" == "early_empty" ]] && RUN_MODE="empty"
   stop_engine
-  start_engine "$BEST_MODE" "$OUT/serve_${BEST_MODE}_160k.log"
+  start_engine "$RUN_MODE" "$OUT/serve_${BEST_MODE}_160k.log"
   "$V/bin/python" "$REPO/tools/r0_k3_cell.py" --port "$PORT" --context 160000 \
     --max-tokens "$MAXTOK" --repeats 3 --tag "coop-prelude-${BEST_MODE}-160k" \
     --out "$OUT/${BEST_MODE}_160000.json" >/dev/null
