@@ -210,6 +210,46 @@ def _inspect_signatures(entries: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def choose_integration_route(
+    entries: dict[str, dict[str, Any]],
+    hits: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    hisparse_keys = (
+        "hisparse_coordinator",
+        "hisparse_connector",
+        "hisparse_managers",
+        "hisparse_specs",
+    )
+    hisparse_core = all(
+        _all_attrs_present(entries.get(k, {})) for k in hisparse_keys
+    )
+    generic_offload = (
+        _all_attrs_present(entries.get("offloading_connector", {}))
+        and _all_attrs_present(entries.get("cpu_offload_spec", {}))
+        and _all_attrs_present(entries.get("cpu_offload_manager", {}))
+    )
+    qwen_mentions_hisparse = bool(hits.get("HiSparse"))
+
+    if hisparse_core:
+        route = "adapt_hisparse_contract"
+    elif generic_offload:
+        route = "extend_generic_offloading_contract"
+    else:
+        route = "custom_vllm_patch_required"
+
+    return {
+        "hisparse_core_available": hisparse_core,
+        "generic_cpu_offloading_available": generic_offload,
+        "qwen4_exp_mentions_hisparse": qwen_mentions_hisparse,
+        "recommended_integration_route": route,
+        "warning": (
+            "Availability is not compatibility. A positive HiSparse probe "
+            "means its ownership/transfer contracts can be reused or adapted; "
+            "it does not prove Qwen4Exp cache layout compatibility."
+        ),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, required=True)
@@ -224,27 +264,6 @@ def main() -> int:
     qwen_root = _qwen_package_root()
     hits = _source_hits(qwen_root)
 
-    hisparse_keys = (
-        "hisparse_coordinator",
-        "hisparse_connector",
-        "hisparse_managers",
-        "hisparse_specs",
-    )
-    hisparse_core = all(_all_attrs_present(entries[k]) for k in hisparse_keys)
-    generic_offload = (
-        _all_attrs_present(entries["offloading_connector"])
-        and _all_attrs_present(entries["cpu_offload_spec"])
-        and _all_attrs_present(entries["cpu_offload_manager"])
-    )
-    qwen_mentions_hisparse = bool(hits["HiSparse"])
-
-    if hisparse_core:
-        route = "adapt_hisparse_contract"
-    elif generic_offload:
-        route = "extend_generic_offloading_contract"
-    else:
-        route = "custom_vllm_patch_required"
-
     result = {
         "schema": 1,
         "vllm": {
@@ -258,17 +277,7 @@ def main() -> int:
             "source_hits": hits,
             "mentions_hisparse": qwen_mentions_hisparse,
         },
-        "decision_support": {
-            "hisparse_core_available": hisparse_core,
-            "generic_cpu_offloading_available": generic_offload,
-            "qwen4_exp_mentions_hisparse": qwen_mentions_hisparse,
-            "recommended_integration_route": route,
-            "warning": (
-                "Availability is not compatibility. A positive HiSparse probe "
-                "means its ownership/transfer contracts can be reused or adapted; "
-                "it does not prove Qwen4Exp cache layout compatibility."
-            ),
-        },
+        "decision_support": choose_integration_route(entries, hits),
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
