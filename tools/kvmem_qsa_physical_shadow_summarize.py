@@ -37,7 +37,21 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
         )
     )
     physical_pages = {int(row["resident_physical_pages"]) for row in stats}
-    physical_geometry_ok = physical_pages == {int(plan["physical_page_count"])}
+    resident_page_tokens = {
+        int(row["resident_page_tokens"]) for row in stats
+    }
+    full_block_tokens = {int(row["full_block_tokens"]) for row in stats}
+    resident_table_widths = {
+        int(row["resident_table_width"]) for row in stats
+    }
+    physical_geometry_ok = (
+        physical_pages == {int(plan["physical_page_count"])}
+        and resident_page_tokens == {int(plan["page_tokens"])}
+        and len(full_block_tokens) == 1
+        and next(iter(full_block_tokens), 0) % int(plan["page_tokens"]) == 0
+        and len(resident_table_widths) == 1
+        and next(iter(resident_table_widths), 0) > int(plan["active_page0"])
+    )
 
     hist_total = sum(int(row["historical_selected"]) for row in stats)
     hist_kept = sum(int(row["historical_resident_kept"]) for row in stats)
@@ -88,6 +102,13 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
             "bootstrap_pages_by_layer": bootstrap_pages,
             "bootstrap_ok": bootstrap_ok,
             "physical_geometry_ok": physical_geometry_ok,
+            "resident_page_tokens": sorted(resident_page_tokens),
+            "full_block_tokens": sorted(full_block_tokens),
+            "resident_table_widths": sorted(resident_table_widths),
+            "cross_granularity_ratio": (
+                next(iter(full_block_tokens)) / int(plan["page_tokens"])
+                if len(full_block_tokens) == 1 else None
+            ),
             "historical_selected": hist_total,
             "historical_resident_kept": hist_kept,
             "historical_selected_dropped": dropped,
