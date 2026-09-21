@@ -48,12 +48,19 @@ def main() -> int:
     usage = response.get("usage") or {}
     choice = (response.get("choices") or [{}])[0]
 
+    targets = case.get("needles")
+    if targets is None:
+        targets = case.get("target_facts", [])
+    target_tokens = case.get("target_tokens")
+    if target_tokens is None:
+        target_tokens = case.get("prompt_tokens")
+
     out = {
         "schema": 1,
         "case": case["name"],
-        "target_tokens": case["target_tokens"],
+        "target_tokens": target_tokens,
         "query_span": case["query_span"],
-        "needles": case["needles"],
+        "needles": targets,
         "wall_s": round(wall, 6),
         "usage": usage,
         "finish_reason": choice.get("finish_reason"),
