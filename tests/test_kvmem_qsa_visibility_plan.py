@@ -20,6 +20,7 @@ def test_build_plan_uses_frozen_k1b_stateful_resident_set():
     summary = {
         "contexts": [{
             "context": 160000,
+            "kv_geometry": {"qsa_layers_observed": 12},
             "policies": {
                 "b256_budget65536": {
                     "replace_5": {
@@ -48,6 +49,7 @@ def test_build_plan_uses_frozen_k1b_stateful_resident_set():
         turn_name="ask_d_e",
         page_tokens=16,
     )
+    assert out["expected_qsa_layers"] == 12
     assert out["resident_regions"] == resident
     assert out["resident_region_count"] == 256
     assert out["resident_page_count"] == 4096
@@ -62,6 +64,7 @@ def test_build_plan_rejects_nonintegral_page_geometry():
     summary = {
         "contexts": [{
             "context": 160000,
+            "kv_geometry": {"qsa_layers_observed": 12},
             "policies": {
                 "b256_budget65536": {
                     "replace_5": {
