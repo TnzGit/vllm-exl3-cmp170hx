@@ -1,5 +1,28 @@
 # R1 K0: QSA-native shadow retrieval
 
+## Instrumentation retry note
+
+The first hardware attempt on
+`a31218dc042d2ebf7efdd6300d6a13edf01b759c` stopped before engine startup.
+
+Root cause was a research-patch bug, not a retrieval result:
+the injected call referenced `self.layer_id`, but exact vLLM 0.29
+`Qwen4ExpQSAAttention` accepts `layer_id` in its constructor only to build
+`QSAIndexer`; it stores `self.layer_name` but does not store
+`self.layer_id`.
+
+The shadow schema does not need a numeric layer ID. Aggregation already keys
+layers by `layer_name`.
+
+The fix therefore:
+- removes `layer_id` from the shadow helper/schema;
+- uses only `layer_name=self.layer_name`;
+- adds patch postconditions forbidding `layer_id=self.layer_id`;
+- updates CPU fixtures to model the real ownership contract.
+
+That failed attempt produced no shadow JSONL or retrieval summary and must not be
+interpreted as QSA retrieval evidence.
+
 ## Status
 
 Research-only diagnostic lane.
