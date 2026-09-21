@@ -303,9 +303,28 @@ Therefore the native QSA signal is sufficiently strong to remain the preferred
 retrieval signal for the next engineering stage. An independent mean-K selector
 is not needed yet.
 
-The next experiment is K1A selection-diff economics: fixed history, changing
-queries, measuring resident-set overlap and estimated stage-in volume before any
-real KV eviction/offload code is written.
+K1A then measured fixed-history multi-query resident-set churn.
+
+K1A result:
+- target retrieval remained 100%;
+- primary 64K/256 fresh-set stage-in was only ~18-22% per transition;
+- exact same-query replay fresh-set Jaccard was only ~0.67-0.69;
+- classification: `HIGH_CHURN_OR_UNSTABLE`.
+
+The important split is that **churn volume was acceptable while fresh-set
+replay stability was poor**.
+
+On SM80 the QSA path uses `persistent_topk`. Its long-row equal-pivot
+collection is a plausible source of tie-boundary set instability, especially
+under K1A's highly repetitive filler history.
+
+The current experiment is K1B:
+- direct persistent-topk unique-vs-tied stability microdiagnostic;
+- offline sticky-residency replay over the existing K1A shadows;
+- pinned H2D bandwidth measurement.
+
+No real KV eviction/offload is written until K1B shows that resident-set
+stability can be controlled without losing retrieval quality.
 
 ## Proposed staged program
 
@@ -432,11 +451,12 @@ K0 QSA-native shadow retrieval subsequently passed.
 Current order:
 
 1. K0 selector feasibility — **complete / GO**;
-2. K1A resident-set churn / selection-diff economics — **current**;
-3. only if K1A is viable, implement target-only CPU-tier bounded attention KV;
-4. add recurrent/GDN replay semantics;
-5. add MTP follower semantics;
-6. consider NVMe only after CPU-tier behavior is proven.
+2. K1A fresh resident-set churn — **complete; acceptable transfer volume but unstable replay**;
+3. K1B tie diagnosis + sticky-residency replay — **current**;
+4. only if K1B is viable, implement target-only CPU-tier bounded attention KV;
+5. add recurrent/GDN replay semantics;
+6. add MTP follower semantics;
+7. consider NVMe only after CPU-tier behavior is proven.
 
 ## Expected payoff by objective
 
