@@ -143,74 +143,141 @@ def _kvmem_apply_visibility(plan, selected, positions):
     return apply_rows, hist_total, hist_kept, dropped
 
 
-def _kvmem_resident_table(layer, plan, full_table):
+def _kvmem_resident_table(layer, plan, full_table, full_block_tokens):
     if full_table.ndim != 2 or full_table.shape[0] != 1:
         raise RuntimeError("K1-Q2A currently requires exactly one request")
+    resident_page_tokens = int(plan["page_tokens"])
+    logical_token_capacity = int(full_table.shape[1]) * int(full_block_tokens)
+    width = (
+        logical_token_capacity + resident_page_tokens - 1
+    ) // resident_page_tokens
+
     cached = getattr(layer, "_kvmem_resident_block_table", None)
     if (
         cached is not None
         and cached.device == full_table.device
-        and cached.shape == full_table.shape
+        and cached.shape == (1, width)
     ):
         return cached
 
-    table = torch.full_like(full_table, -1)
+    table = torch.full(
+        (1, width),
+        -1,
+        dtype=full_table.dtype,
+        device=full_table.device,
+    )
     resident_pages = plan["resident_pages"]
     resident_count = int(plan["resident_page_count"])
-    width = int(table.shape[1])
     for logical_page, physical_page in zip(
         resident_pages, range(resident_count), strict=True
     ):
         if logical_page >= width:
-            raise RuntimeError("resident logical page exceeds block-table width")
+            raise RuntimeError("resident logical page exceeds resident table width")
         table[0, logical_page] = physical_page
 
     active_page0 = int(plan["active_page0"])
     reserve_pages = int(plan["active_reserve_pages"])
+    if active_page0 + reserve_pages > width:
+        raise RuntimeError("active reserve exceeds resident table width")
     for off in range(reserve_pages):
-        logical_page = active_page0 + off
-        if logical_page >= width:
-            break
-        table[0, logical_page] = resident_count + off
+        table[0, active_page0 + off] = resident_count + off
 
     layer._kvmem_resident_block_table = table
+    layer._kvmem_resident_block_table_width = width
     return table
 
 
 def _kvmem_bootstrap_resident(layer, plan, full_cache, full_table):
-    cache = getattr(layer, "_kvmem_resident_cache", None)
-    if cache is None:
-        shape = (int(plan["physical_page_count"]), *full_cache.shape[1:])
-        cache = torch.empty(shape, dtype=full_cache.dtype, device=full_cache.device)
-        layer._kvmem_resident_cache = cache
-
-    if getattr(layer, "_kvmem_resident_initialized", False):
-        return cache
-
+    if full_cache.ndim != 4:
+        raise RuntimeError("K1-Q2A expected a 4D QSA main KV cache")
     if full_table.ndim != 2 or full_table.shape[0] != 1:
         raise RuntimeError("K1-Q2A bootstrap currently requires one request")
 
+    # QSA full-cache layout is [physical_block, kv_heads, block_tokens, 2*head].
+    full_block_tokens = int(full_cache.shape[2])
+    resident_page_tokens = int(plan["page_tokens"])
+    if full_block_tokens <= 0 or full_block_tokens % resident_page_tokens:
+        raise RuntimeError(
+            "full QSA block size must be divisible by resident page size: "
+            f"full={full_block_tokens} resident={resident_page_tokens}"
+        )
+
+    cache = getattr(layer, "_kvmem_resident_cache", None)
+    expected_shape = (
+        int(plan["physical_page_count"]),
+        int(full_cache.shape[1]),
+        resident_page_tokens,
+        int(full_cache.shape[3]),
+    )
+    if cache is None:
+        cache = torch.empty(
+            expected_shape,
+            dtype=full_cache.dtype,
+            device=full_cache.device,
+        )
+        layer._kvmem_resident_cache = cache
+    elif tuple(cache.shape) != expected_shape:
+        raise RuntimeError(
+            f"resident cache shape mismatch {tuple(cache.shape)} != {expected_shape}"
+        )
+
+    if getattr(layer, "_kvmem_resident_initialized", False):
+        return cache, full_block_tokens
+
     resident_pages = plan["resident_pages"]
     resident_count = int(plan["resident_page_count"])
-    page_ids = _kvmem_plan_tensor(
+    logical_page_ids = _kvmem_plan_tensor(
         plan,
         "resident_pages",
         resident_pages,
         full_table.device,
         torch.int64,
     )
-    src = full_table[0].index_select(0, page_ids).to(torch.int64)
-    if bool((src < 0).any().item()):
+
+    # Every 16-token resident page is gathered from the scheduler's much larger
+    # hybrid attention blocks (1568 tokens on the qualified CMP170HX runtime).
+    # The algorithm is generic for any full block that is a multiple of the
+    # resident page size.
+    token0 = logical_page_ids * resident_page_tokens
+    logical_full_block = torch.div(
+        token0, full_block_tokens, rounding_mode="floor"
+    )
+    offset0 = torch.remainder(token0, full_block_tokens)
+    if bool((offset0 + resident_page_tokens > full_block_tokens).any().item()):
+        raise RuntimeError("resident page crosses a full-cache block boundary")
+    if bool((logical_full_block >= full_table.shape[1]).any().item()):
+        raise RuntimeError("resident history exceeds full-cache block table")
+
+    src_physical_block = full_table[0].index_select(
+        0, logical_full_block
+    ).to(torch.int64)
+    if bool((src_physical_block < 0).any().item()):
         raise RuntimeError("full cache lacks a historical resident page")
 
-    chunk = 256
+    token_offsets = torch.arange(
+        resident_page_tokens,
+        dtype=torch.int64,
+        device=full_cache.device,
+    )
+    chunk = 128
     for start in range(0, resident_count, chunk):
         end = min(start + chunk, resident_count)
-        cache[start:end].copy_(full_cache.index_select(0, src[start:end]))
+        src_blocks = src_physical_block[start:end]
+        src_offsets = offset0[start:end]
+        # Advanced gather result: [pages, page_tokens, kv_heads, 2*head].
+        gathered = full_cache[
+            src_blocks[:, None],
+            :,
+            src_offsets[:, None] + token_offsets[None, :],
+            :,
+        ]
+        # Resident cache layout: [pages, kv_heads, page_tokens, 2*head].
+        cache[start:end].copy_(gathered.permute(0, 2, 1, 3))
 
     layer._kvmem_resident_initialized = True
     layer._kvmem_resident_bootstrap_pages = resident_count
-    return cache
+    layer._kvmem_full_block_tokens = full_block_tokens
+    return cache, full_block_tokens
 
 
 def _kvmem_active_slot_mapping(plan, positions, apply_rows, device):
@@ -275,11 +342,14 @@ def _kvmem_resident_attention(
     if query.is_cuda and torch.cuda.is_current_stream_capturing():
         raise RuntimeError("K1-Q2A physical shadow requires eager execution")
 
-    resident_cache = _kvmem_bootstrap_resident(
+    resident_cache, full_block_tokens = _kvmem_bootstrap_resident(
         layer, plan, layer.kv_cache, main_metadata.block_table
     )
     resident_table = _kvmem_resident_table(
-        layer, plan, main_metadata.block_table
+        layer,
+        plan,
+        main_metadata.block_table,
+        full_block_tokens,
     )
 
     active_slots = _kvmem_active_slot_mapping(
@@ -355,6 +425,11 @@ def _kvmem_resident_attention(
                 getattr(layer, "_kvmem_resident_bootstrap_pages", 0)
             ),
             "resident_physical_pages": int(plan["physical_page_count"]),
+            "resident_page_tokens": int(plan["page_tokens"]),
+            "full_block_tokens": int(full_block_tokens),
+            "resident_table_width": int(
+                getattr(layer, "_kvmem_resident_block_table_width", 0)
+            ),
             "attention_exact": exact,
             "attention_max_abs": max_abs,
         }
@@ -443,6 +518,9 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "_kvmem_active_slot_mapping",
         "qsa_sparse_paged_attention",
         "torch.equal(ref_rows, resident_out)",
+        "full_block_tokens",
+        "resident_page_tokens",
+        "resident_table_width",
         "resident attention mismatch",
     )
     missing = [x for x in required if x not in out]
