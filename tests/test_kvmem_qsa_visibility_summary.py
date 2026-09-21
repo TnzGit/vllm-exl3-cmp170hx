@@ -21,6 +21,7 @@ def _plan():
         "budget_tokens": 65536,
         "replacement_fraction": 0.05,
         "resident_region_count": 256,
+        "expected_qsa_layers": 1,
     }
 
 
@@ -46,6 +47,8 @@ def test_exact_parity_go_when_mask_is_exercised():
     assert out["classification"] == "EXACT_PARITY_GO"
     assert out["visibility"]["mask_exercised"] is True
     assert out["visibility"]["historical_selected_dropped"] == 15
+    assert out["visibility"]["layer_coverage_ok"] is True
+    assert out["visibility"]["accounting_ok"] is True
 
 
 def test_correct_but_nonexact_output_is_semantic_go():
