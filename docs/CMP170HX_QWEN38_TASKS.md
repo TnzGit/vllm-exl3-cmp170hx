@@ -1,5 +1,17 @@
 # CMP170HX Qwen3.8-Flash-Next task board
 
+
+> **Current-status override (2026-09-21):** the original unchecked F3/F4/F5
+> checklist below is retained as bring-up history, but later R0 work has completed
+> those gates. The current production candidate is **MTP k=3 + COOP=1 +
+> PIECEWISE**, qualified through 240K with full greedy token-ID parity and no
+> acceptance/performance cliff. The old "MTP net negative / no-draft production"
+> conclusion was invalidated by a benchmark denominator bug (stream chunks were
+> counted as tokens). See `R0_MTP_POST_COOP.md`, `R0_MTP_K3_PRODUCTION.md`, and
+> `R0_MTP_K3_AMDAHL.md`. The immediate P0 is the selective vLLM #55054
+> async-metadata backport described in `R0_MTP_ASYNC_METADATA.md`.
+
+
 Primary plan: `docs/CMP170HX_QWEN38_FLASH_NEXT.md`.
 
 Machine-side work should use branch `bringup/qwen38-flash-next-cmp170hx-r0`, cut from the reviewed scaffold. Keep `research/qwen38-flash-next-cmp170hx` as the scaffold lane.
