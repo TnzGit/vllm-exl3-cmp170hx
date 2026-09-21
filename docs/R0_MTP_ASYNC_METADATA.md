@@ -59,6 +59,16 @@ This branch adds:
 
 No production default is changed.
 
+Candidate patch command:
+
+```bash
+python tools/apply_qwen4_exp_patches.py <site-packages/vllm> \
+  --profile text-mtp \
+  --mtp-async-metadata
+```
+
+Baseline uses the identical command without `--mtp-async-metadata`.
+
 ## CMP170HX hardware A/B contract
 
 Use the same qualified k=3 production configuration for both cells:
