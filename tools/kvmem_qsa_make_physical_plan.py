@@ -74,6 +74,7 @@ def build_plan(
         "turn": turn_name,
         "region_tokens": REGION_TOKENS,
         "page_tokens": page_tokens,
+        "resident_page_tokens": page_tokens,
         "pages_per_region": pages_per_region,
         "budget_tokens": BUDGET_TOKENS,
         "replacement_fraction": REPLACEMENT,
@@ -93,9 +94,11 @@ def build_plan(
         ),
         "target_facts": turn.get("target_facts", []),
         "note": (
-            "Q2A keeps the scheduler/full cache intact as a source/reference, "
-            "while affected QSA rows read from an independent bounded resident "
-            "physical cache using a logical-page remap."
+            "Q2A keeps the scheduler/full cache intact as a source/reference. "
+            "page_tokens is the independent resident-cache page size, not the "
+            "hybrid scheduler's runtime full-cache block size. Affected QSA "
+            "rows read from the bounded resident cache through cross-granularity "
+            "logical-page remapping."
         ),
     }
 
