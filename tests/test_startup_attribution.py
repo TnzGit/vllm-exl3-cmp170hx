@@ -31,6 +31,11 @@ INFO Dynamo bytecode transform time: 10.85 s
 INFO Compiling graph(1, 2048) took 19.13 s
 INFO torch.compile took 33.25 s in total
 INFO Initial profiling/warmup run took 60.81 s
+INFO saved AOT compiled function to /tmp/torch_aot_compile/bcd650c067/rank_0_0/model
+INFO (eagle_head) Dynamo bytecode transform time: 0.39 s
+INFO (eagle_head) Compiling a graph for compile range (1, 2048) takes 2.09 s
+INFO (eagle_head) torch.compile took 2.67 s in total
+INFO (eagle_head) Initial profiling/warmup run took 0.02 s
 INFO Graph capturing finished in 5 secs, took 1.00 GiB
 INFO init engine (profile, create kv cache, warmup model) took 120.70 s
 """
@@ -49,7 +54,12 @@ INFO init engine (profile, create kv cache, warmup model) took 120.70 s
     assert out["timings"]["torch_compile_total_s"] == 33.25
     assert out["timings"]["initial_profiling_warmup_s"] == 60.81
     assert out["timings"]["dynamo_bytecode_s"] == 10.85
-    assert out["timings"]["compile_graph_s"] == [19.13]
+    assert out["timings"]["compile_graph_s"] == [19.13, 2.09]
+    assert out["timings"]["backbone_compile"]["torch_compile_s"] == [33.25]
+    assert out["timings"]["backbone_compile"]["initial_profiling_warmup_s"] == [60.81]
+    assert out["timings"]["eagle_head_compile"]["torch_compile_s"] == [2.67]
+    assert out["timings"]["eagle_head_compile"]["initial_profiling_warmup_s"] == [0.02]
+    assert out["compile_cache"]["aot_saved_ids"] == ["bcd650c067"]
     assert out["runtime_geometry"]["available_kv_cache_gib"] == 9.75
     assert out["runtime_geometry"]["gpu_kv_cache_size_tokens"] == 240128
     assert out["runtime_geometry"]["capacity_request_tokens"] == 161000
@@ -117,10 +127,12 @@ def test_compile_cache_hit_evidence_is_reported():
 Loading weights took 20.00 seconds
 Model loading took 40.00 GiB memory and 25.000000 seconds
 reconstructed serializable fn from standalone compile artifacts. num_artifacts=52 num_submods=1
-Directly load AOT compilation from path /tmp/aot
+Directly load AOT compilation from path /tmp/torch_aot_compile/bcd650c067/rank_0_0/model
 Directly load the compiled graph(s) for compile range Range(start=1, end=2048) from the cache, took 0.050 s
 torch.compile took 0.62 s in total
 Initial profiling/warmup run took 1.28 s
+INFO (eagle_head) torch.compile took 0.05 s in total
+INFO (eagle_head) Initial profiling/warmup run took 0.02 s
 init engine (profile, create kv cache, warmup model) took 3.00 s
 """
     )
@@ -128,8 +140,10 @@ init engine (profile, create kv cache, warmup model) took 3.00 s
     assert out["compile_cache"]["aot_direct_load"] is True
     assert out["compile_cache"]["compiled_graph_cache_load"] is True
     assert out["compile_cache"]["standalone_artifact_reconstruction"] is True
+    assert out["compile_cache"]["aot_loaded_ids"] == ["bcd650c067"]
     assert out["timings"]["torch_compile_total_s"] == 0.62
     assert out["timings"]["initial_profiling_warmup_s"] == 1.28
+    assert out["timings"]["eagle_head_compile"]["torch_compile_s"] == [0.05]
 
 
 def test_multiple_auxiliary_weight_loads_are_not_misnamed_as_one_draft():
@@ -162,3 +176,51 @@ init engine (profile, create kv cache, warmup model) took 8.0 s
 """
     )
     assert out["timings"]["compile_graph_s"] == [4.25]
+
+
+
+def test_backbone_scalars_do_not_take_last_eagle_head_match():
+    mod = _load()
+    out = mod.parse_log(
+        """
+Loading weights took 100.0 seconds
+Loading weights took 20.0 seconds
+Model loading took 50.0 GiB memory and 140.0 seconds
+Dynamo bytecode transform time: 10.85 s
+torch.compile took 33.25 s in total
+Initial profiling/warmup run took 60.81 s
+(eagle_head) Dynamo bytecode transform time: 0.39 s
+(eagle_head) torch.compile took 2.67 s in total
+(eagle_head) Initial profiling/warmup run took 0.02 s
+init engine (profile, create kv cache, warmup model) took 120.7 s
+"""
+    )
+    assert out["timings"]["torch_compile_total_s"] == 33.25
+    assert out["timings"]["initial_profiling_warmup_s"] == 60.81
+    assert out["timings"]["dynamo_bytecode_s"] == 10.85
+    assert out["timings"]["eagle_head_compile"]["torch_compile_s"] == [2.67]
+
+
+def test_aot_saved_and_loaded_ids_share_identity_across_log_forms():
+    mod = _load()
+    saved = mod.parse_log(
+        """
+Loading weights took 1.0 seconds
+Model loading took 1.0 GiB memory and 2.0 seconds
+saved AOT compiled function to /x/torch_aot_compile/abc123/rank_0_0/model
+init engine (profile, create kv cache, warmup model) took 1.0 s
+"""
+    )
+    loaded = mod.parse_log(
+        """
+Loading weights took 1.0 seconds
+Model loading took 1.0 GiB memory and 2.0 seconds
+Directly load AOT compilation from path /x/torch_aot_compile/abc123/rank_0_0/model
+init engine (profile, create kv cache, warmup model) took 1.0 s
+"""
+    )
+    assert saved["compile_cache"]["aot_saved_ids"] == ["abc123"]
+    assert loaded["compile_cache"]["aot_loaded_ids"] == ["abc123"]
+    assert set(saved["compile_cache"]["aot_saved_ids"]) & set(
+        loaded["compile_cache"]["aot_loaded_ids"]
+    )
