@@ -33,6 +33,11 @@ export LD_LIBRARY_PATH="$LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 mkdir -p "$OUT"
 LAUNCH_PID=""
 
+xid_now() {
+  { journalctl -k 2>/dev/null | grep -ciE "NVRM: Xid" || true; } |
+    head -1 | tr -cd '0-9'
+}
+
 stop_engine() {
   if [[ -n "$LAUNCH_PID" ]]; then
     kill -TERM -- "-$LAUNCH_PID" 2>/dev/null || true
@@ -131,6 +136,9 @@ PY
   sleep 5
 }
 
+XID0=$(xid_now); XID0=${XID0:-0}
+echo "xid_before=$XID0"
+
 run_boot 1 "4k_current" "$SHORT_MAXLEN"
 run_boot 2 "4k_warm" "$SHORT_MAXLEN"
 run_boot 3 "161k_warm" "$LONG_MAXLEN"
@@ -189,8 +197,18 @@ out={
 open(sys.argv[4],"w").write(json.dumps(out,indent=2))
 print(json.dumps(out,indent=2))
 PY
+XID1=$(xid_now); XID1=${XID1:-0}
+XID_DELTA=$((XID1-XID0))
+echo "xid_after=$XID1 xid_delta=$XID_DELTA"
+
 echo "=== final state ==="
 nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu   --format=csv,noheader || true
+echo "gpu_processes=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+' || true)"
 echo "vllm_processes=$(pgrep -af 'VLLM::EngineCore|vllm serve' | wc -l)"
+if command -v ss >/dev/null 2>&1; then
+  if ss -ltnp 2>/dev/null | grep -q ":$PORT "; then echo "port_$PORT=busy"; else echo "port_$PORT=free"; fi
+fi
 echo "results=$OUT"
 echo "NOTE: no prompt executed; no page-cache drop; no source modification."
+
+if (( XID_DELTA != 0 )); then exit 3; fi
