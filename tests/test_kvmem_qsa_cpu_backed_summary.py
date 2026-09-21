@@ -136,3 +136,16 @@ def test_q2b_rejects_selected_input_mapping_failure_after_transfer():
     out = mod.summarize(_response(), rows, _plan())
     assert out["classification"] == "Q2B_INPUT_MAPPING_NO_GO"
     assert out["cpu_backed_go"] is False
+
+
+
+def test_q2b_rejects_semantic_failure_after_transfer_and_mapping_pass():
+    mod = _load()
+    response = _response()
+    response["target_codes_in_order"] = False
+    response["text"] = "wrong"
+    out = mod.summarize(response, _stats(), _plan())
+    assert out["transfer_gate"] is True
+    assert out["physical_mapping_go"] is True
+    assert out["classification"] == "Q2B_SEMANTIC_NO_GO"
+    assert out["cpu_backed_go"] is False
