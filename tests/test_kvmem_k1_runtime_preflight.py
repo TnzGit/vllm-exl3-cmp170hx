@@ -85,3 +85,56 @@ def test_qwen_hisparse_hit_is_reported_but_not_treated_as_compatibility():
     )
     assert out["qwen4_exp_mentions_hisparse"] is True
     assert "not compatibility" in out["warning"].lower()
+
+
+def test_safe_find_spec_handles_missing_parent_package(monkeypatch):
+    mod = _load()
+
+    def boom(_name):
+        raise ModuleNotFoundError("missing parent")
+
+    monkeypatch.setattr(mod.importlib.util, "find_spec", boom)
+    spec, error = mod._safe_find_spec("vllm.v1.hisparse.coordinator")
+    assert spec is None
+    assert "ModuleNotFoundError" in error
+
+
+def test_probe_module_reports_missing_parent_as_found_false(monkeypatch):
+    mod = _load()
+
+    def boom(_name):
+        raise ModuleNotFoundError("No module named 'vllm.v1.hisparse'")
+
+    monkeypatch.setattr(mod.importlib.util, "find_spec", boom)
+    out = mod._probe_module(
+        "vllm.v1.hisparse.coordinator",
+        ("HiSparseCoordinator",),
+    )
+    assert out["found"] is False
+    assert out["imported"] is False
+    assert out["attrs"]["HiSparseCoordinator"] is False
+    assert "ModuleNotFoundError" in out["error"]
+
+
+def test_qwen_package_root_skips_missing_candidate_parent(monkeypatch):
+    mod = _load()
+    calls = []
+
+    def fake_safe(name):
+        calls.append(name)
+        if name == "vllm.models.qwen4_exp":
+            return None, "missing"
+        return None, None
+
+    monkeypatch.setattr(mod, "_safe_find_spec", fake_safe)
+    assert mod._qwen_package_root() is None
+    assert calls == [
+        "vllm.models.qwen4_exp",
+        "vllm.model_executor.models.qwen4_exp",
+    ]
+
+
+def test_main_source_uses_hits_for_mentions_hisparse():
+    src = SCRIPT.read_text()
+    assert '"mentions_hisparse": bool(hits.get("HiSparse"))' in src
+    assert '"mentions_hisparse": qwen_mentions_hisparse' not in src
