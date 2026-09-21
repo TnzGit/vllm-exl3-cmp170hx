@@ -10,7 +10,6 @@ sticky resident GPU slots and verifies every byte.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import sys
@@ -33,29 +32,7 @@ from vllm_exl3.kvmem_transfer import (
     page_bytes_per_layer,
     qsa_main_kv_bytes_per_token,
 )
-
-
-def _offload_key(logical_page: int):
-    from vllm.v1.kv_offload.base import make_offload_key
-
-    digest = hashlib.sha256(
-        f"k1t-logical-page:{logical_page}".encode()
-    ).digest()
-    return make_offload_key(digest, 0)
-
-
-def _take_result(worker, job_id: int):
-    results = worker.get_finished()
-    matches = [row for row in results if row.job_id == job_id]
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"expected exactly one completed transfer for job {job_id}; "
-            f"got {[row.job_id for row in results]}"
-        )
-    result = matches[0]
-    if not result.success:
-        raise RuntimeError(f"transfer job {job_id} reported failure")
-    return result
+from vllm_exl3.kvmem_vllm_offload import VllmCPUPageBacking
 
 
 def _fill_pattern(
@@ -162,12 +139,7 @@ def run_probe(args: argparse.Namespace) -> dict:
         CanonicalKVCaches,
         CanonicalKVCacheRef,
         CanonicalKVCacheTensor,
-        GPULoadStoreSpec,
-        LookupResult,
-        ReqContext,
     )
-    from vllm.v1.kv_offload.cpu.gpu_worker import CPUOffloadingWorker
-    from vllm.v1.kv_offload.cpu.manager import CPUOffloadingManager
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -238,19 +210,11 @@ def run_probe(args: argparse.Namespace) -> dict:
         ],
     )
 
-    manager = CPUOffloadingManager(
-        num_blocks=num_transfer_pages,
-        cache_policy="lru",
-    )
-    worker = CPUOffloadingWorker(
+    backing = VllmCPUPageBacking(
         kv_caches=kv_caches,
-        blocks_per_chunk=1,
         num_cpu_blocks=num_transfer_pages,
-        mmap_region=None,
-        canonical_layout=False,
+        lineage="k1t-transfer-probe",
     )
-    req = ReqContext(req_id="k1t-transfer-probe")
-    keys = [_offload_key(page) for page in logical_pages]
 
     store_row = None
     load_rows = []
@@ -265,64 +229,28 @@ def run_probe(args: argparse.Namespace) -> dict:
                 layer_idx=layer,
             )
 
-        prepared_store = manager.prepare_store(keys, req)
-        if prepared_store is None:
-            raise RuntimeError("CPU manager refused the initial KV publication")
-        if prepared_store.keys_to_store != keys:
-            raise RuntimeError("CPU manager changed initial key order/content")
-
-        store_gpu_spec = GPULoadStoreSpec(
-            staging_gpu_pages,
-            group_sizes=[num_transfer_pages],
-            block_indices=[0],
-        )
-        t0 = time.perf_counter()
-        if not worker.submit_store(
-            1,
-            store_gpu_spec,
-            prepared_store.store_spec,
-        ):
-            raise RuntimeError("CPUOffloadingWorker.submit_store returned false")
-        worker.wait({1})
-        store_wall = time.perf_counter() - t0
-        store_result = _take_result(worker, 1)
-        manager.complete_store(keys, req, success=True)
+        store_obs = backing.publish(logical_pages, staging_gpu_pages)
         store_row = {
-            "bytes": store_result.transfer_size,
-            "event_seconds": store_result.transfer_time,
-            "wall_seconds": store_wall,
+            "bytes": store_obs.transfer_bytes,
+            "event_seconds": store_obs.event_seconds,
+            "wall_seconds": store_obs.wall_seconds,
         }
 
-        if any(manager.lookup(key, req) is not LookupResult.HIT for key in keys):
+        if not backing.all_present(logical_pages):
             raise RuntimeError("published CPU backing keys are not all HIT")
-
-        cpu_spec = manager.prepare_load(keys, req)
-        dst_gpu_spec = GPULoadStoreSpec(
-            dst_gpu_pages,
-            group_sizes=[num_transfer_pages],
-            block_indices=[0],
-        )
 
         for repeat in range(args.load_repeats):
             for tensor in gpu_tensors:
                 tensor[dst_gpu_pages].zero_()
             torch.cuda.synchronize()
 
-            job_id = 100 + repeat
-            t0 = time.perf_counter()
-            if not worker.submit_load(job_id, cpu_spec, dst_gpu_spec):
-                raise RuntimeError(
-                    f"CPUOffloadingWorker.submit_load failed at repeat {repeat}"
-                )
-            worker.wait({job_id})
-            wall = time.perf_counter() - t0
-            result = _take_result(worker, job_id)
+            obs = backing.stage_in(logical_pages, dst_gpu_pages)
             load_rows.append(
                 {
                     "repeat": repeat,
-                    "bytes": result.transfer_size,
-                    "event_seconds": result.transfer_time,
-                    "wall_seconds": wall,
+                    "bytes": obs.transfer_bytes,
+                    "event_seconds": obs.event_seconds,
+                    "wall_seconds": obs.wall_seconds,
                 }
             )
 
@@ -351,8 +279,6 @@ def run_probe(args: argparse.Namespace) -> dict:
                 }
             )
 
-        manager.complete_load(keys, req)
-
         table = coordinator.materialize_qsa_page_table(
             logical_tokens=args.logical_tokens,
             geometry=geometry,
@@ -380,7 +306,7 @@ def run_probe(args: argparse.Namespace) -> dict:
                     )
 
     finally:
-        worker.shutdown()
+        backing.close()
 
     if store_row is None:
         raise RuntimeError("store transfer did not complete")
