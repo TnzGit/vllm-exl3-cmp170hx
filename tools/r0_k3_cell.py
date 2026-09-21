@@ -196,13 +196,32 @@ def main() -> int:
         # the gap is at most k+1 tokens. The API usage count stays the sole
         # authoritative denominator; this only sanity-checks the counters.
         derived = (d_drafts + d_acc) if d_drafts else None
-        consistent = (0 <= (derived - ct) <= (args.max_tokens and 4 or 4)) \
-            if (derived is not None and ct) else None
+        # Spec-counter boundary contract: the initial target token can precede
+        # the first speculative pass (-1), while max_tokens truncation can make
+        # the last pass account for up to k extra derived tokens (+k).
+        # API usage.completion_tokens remains the authoritative TPOT divisor.
+        spec_k = (
+            int(round(d_dtok / d_drafts))
+            if d_drafts and d_dtok
+            else None
+        )
+        counter_delta = (
+            derived - ct
+            if (derived is not None and ct is not None)
+            else None
+        )
+        consistent = (
+            -1 <= counter_delta <= spec_k
+            if (counter_delta is not None and spec_k is not None)
+            else None
+        )
         cells.append({**r,
                       "spec_drafts": int(d_drafts) if d_drafts else None,
                       "spec_draft_tokens": int(d_dtok) if d_dtok else None,
                       "spec_accepted": int(d_acc) if d_acc else None,
+                      "spec_k": spec_k,
                       "derived_emitted": derived,
+                      "counter_delta": counter_delta,
                       "denominator_consistent": consistent,
                       "accepted_per_pass": round(d_acc / d_drafts, 4) if d_drafts else None,
                       "accepted_per_output": round(d_acc / ct, 4) if d_acc and ct else None,
@@ -223,7 +242,7 @@ def main() -> int:
         "status": "INVALID" if invalid else "VALID",
         "denominator_note": (
             "authoritative denominator = API usage completion_tokens; "
-            "cross-checked against spec drafts+accepted"
+            "cross-checked against spec drafts+accepted with boundary range -1..k"
         ),
         "ms_per_output_token_median": ms[len(ms) // 2] if ms else None,
         "output_tok_s_median": tps[len(tps) // 2] if tps else None,
