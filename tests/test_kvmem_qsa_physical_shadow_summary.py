@@ -23,14 +23,15 @@ def _plan():
         "physical_page_count": 4160,
         "page_tokens": 16,
         "active_page0": 9968,
-        "expected_qsa_layers": 2,
+        "expected_qsa_layers": 12,
     }
 
 
 def _stats():
+    layer_ids = (3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47)
     return [
         {
-            "layer_name": "layer.3",
+            "layer_name": f"layer.{layer_id}",
             "attention_exact": True,
             "attention_max_abs": 0.0,
             "bootstrap_pages": 4096,
@@ -42,21 +43,8 @@ def _stats():
             "historical_selected": 100,
             "historical_resident_kept": 94,
             "historical_selected_dropped": 6,
-        },
-        {
-            "layer_name": "layer.7",
-            "attention_exact": True,
-            "attention_max_abs": 0.0,
-            "bootstrap_pages": 4096,
-            "resident_physical_pages": 4160,
-            "resident_page_tokens": 16,
-            "full_block_tokens": 1568,
-            "resident_table_width": 10080,
-            "resident_cache_bytes": 136314880,
-            "historical_selected": 100,
-            "historical_resident_kept": 93,
-            "historical_selected_dropped": 7,
-        },
+        }
+        for layer_id in layer_ids
     ]
 
 
