@@ -69,3 +69,6 @@ def test_loader_runner_keeps_health_cleanup_evidence():
     assert "gpu_processes=" in src
     assert "vllm_processes=" in src
     assert "port_$PORT=" in src
+    assert "installed_exl3_sha_before=" in src
+    assert "installed_exl3_sha_after=" in src
+    assert "installed_exl3_unchanged=true" in src
