@@ -33,6 +33,9 @@ def _stats():
             "attention_max_abs": 0.0,
             "bootstrap_pages": 4096,
             "resident_physical_pages": 4160,
+            "resident_page_tokens": 16,
+            "full_block_tokens": 1568,
+            "resident_table_width": 10080,
             "historical_selected": 100,
             "historical_resident_kept": 94,
             "historical_selected_dropped": 6,
@@ -43,6 +46,9 @@ def _stats():
             "attention_max_abs": 0.0,
             "bootstrap_pages": 4096,
             "resident_physical_pages": 4160,
+            "resident_page_tokens": 16,
+            "full_block_tokens": 1568,
+            "resident_table_width": 10080,
             "historical_selected": 100,
             "historical_resident_kept": 93,
             "historical_selected_dropped": 7,
@@ -64,6 +70,10 @@ def test_q2a_go_requires_exact_attention_and_target():
     assert out["evidence"]["attention_max_abs"] == 0.0
     assert out["evidence"]["bootstrap_ok"] is True
     assert out["evidence"]["accounting_ok"] is True
+    assert out["evidence"]["physical_geometry_ok"] is True
+    assert out["evidence"]["resident_page_tokens"] == [16]
+    assert out["evidence"]["full_block_tokens"] == [1568]
+    assert out["evidence"]["cross_granularity_ratio"] == 98.0
 
 
 def test_q2a_rejects_any_attention_difference():
