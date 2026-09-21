@@ -113,7 +113,6 @@ _COOP = os.environ.get("VLLM_EXL3_COOP", "0") == "1"
 # provably unnecessary before the decode-shaped cooperative MoE path.
 # Defaults OFF so the accepted production path is unchanged.
 _COOP_EARLY_PRELUDE = os.environ.get("VLLM_EXL3_COOP_EARLY_PRELUDE", "0") == "1"
-_COOP_OUT_EMPTY = os.environ.get("VLLM_EXL3_COOP_OUT_EMPTY", "0") == "1"
 try:
     FAT_EXPERT_THRESHOLD = max(0, int(os.environ.get("VLLM_EXL3_FAT_THRESHOLD", "256")))
 except (TypeError, ValueError):
@@ -1942,10 +1941,9 @@ def _try_exl3_coop_early(
     For slots <= min(256, FAT_EXPERT_THRESHOLD), no expert count can exceed
     the fat threshold, so those tensors/kernels are mathematically unnecessary.
 
-    This helper preserves the exact cooperative kernel call.  With
-    VLLM_EXL3_COOP_OUT_EMPTY=1 it also replaces the pre-kernel zero-fill of the
-    output with an uninitialized tensor; the cooperative B kernel writes every
-    output chunk, including the explicit empty-row path.
+    This helper preserves the exact cooperative kernel call and historical
+    FP32 output zero-initialization. The separate output-empty probe was
+    hardware-negative and is intentionally not carried into qualification.
     """
     if not (_COOP and _COOP_EARLY_PRELUDE):
         return None
@@ -1997,11 +1995,7 @@ def _try_exl3_coop_early(
         dtype=torch.int32,
         device=dev,
     )
-    out = (
-        torch.empty(tokens, hidden, dtype=torch.float32, device=dev)
-        if _COOP_OUT_EMPTY
-        else torch.zeros(tokens, hidden, dtype=torch.float32, device=dev)
-    )
+    out = torch.zeros(tokens, hidden, dtype=torch.float32, device=dev)
 
     exllamav3_ext.exl3_moe_coop(
         xh,
