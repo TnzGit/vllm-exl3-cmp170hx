@@ -26,7 +26,6 @@ from typing import Any
 RE_FLOAT = r"([0-9]+(?:\.[0-9]+)?)"
 
 PATTERNS = {
-    "weights_s": re.compile(r"Loading weights took " + RE_FLOAT + r" seconds"),
     "model_s": re.compile(
         r"Model loading took [0-9.]+ GiB memory and " + RE_FLOAT + r" seconds"
     ),
@@ -55,10 +54,31 @@ PATTERNS = {
         + RE_FLOAT
         + r"s"
     ),
+    "torch_compile_total_s": re.compile(
+        r"torch\.compile took " + RE_FLOAT + r" s in total"
+    ),
+    "compile_warmup_together_s": re.compile(
+        r"torch\.compile and initial profiling/warmup run together took "
+        + RE_FLOAT
+        + r" s in total"
+    ),
+    "initial_profiling_warmup_s": re.compile(
+        r"Initial profiling/warmup run took " + RE_FLOAT + r" s"
+    ),
+    "dynamo_bytecode_s": re.compile(
+        r"Dynamo bytecode transform time: " + RE_FLOAT + r" s"
+    ),
 }
 
+WEIGHTS_RE = re.compile(r"Loading weights took " + RE_FLOAT + r" seconds")
 PRESCAN_RE = re.compile(
     r"EXL3 trellis PRESCAN ready .*? elapsed_ms=" + RE_FLOAT
+)
+COMPILE_GRAPH_RE = re.compile(
+    r"Compiling graph\([^\n]*?\).*?took " + RE_FLOAT + r" s"
+)
+COMPILE_CACHE_DIR_RE = re.compile(
+    r"Using cache directory: (\S+) for vLLM's torch\.compile"
 )
 KV_CAPACITY_RE = re.compile(
     r"GPU KV cache size: ([0-9,]+) tokens, "
@@ -76,6 +96,19 @@ def _last_float(pattern: re.Pattern[str], text: str) -> float | None:
 def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
     vals = {name: _last_float(pat, text) for name, pat in PATTERNS.items()}
 
+    weight_loads_s = [float(x) for x in WEIGHTS_RE.findall(text)]
+    main_weights_s = weight_loads_s[0] if weight_loads_s else None
+    auxiliary_weight_loads_s = weight_loads_s[1:]
+    auxiliary_weights_s = (
+        sum(auxiliary_weight_loads_s) if auxiliary_weight_loads_s else 0.0
+    )
+    draft_weights_s = (
+        auxiliary_weight_loads_s[0]
+        if len(auxiliary_weight_loads_s) == 1
+        else None
+    )
+    total_weights_s = sum(weight_loads_s) if weight_loads_s else None
+
     prescan_ms = [float(x) for x in PRESCAN_RE.findall(text)]
     kv_capacity_hits = KV_CAPACITY_RE.findall(text)
     if kv_capacity_hits:
@@ -87,14 +120,14 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
         kv_cache_size_tokens = None
         kv_capacity_request_tokens = None
         kv_max_concurrency = None
-    weights_s = vals["weights_s"]
+    weights_s = main_weights_s
     model_s = vals["model_s"]
     engine_init_s = vals["engine_init_s"]
     graph_capture_s = vals["graph_capture_s"]
 
     model_non_weight_s = (
-        max(0.0, model_s - weights_s)
-        if model_s is not None and weights_s is not None
+        max(0.0, model_s - total_weights_s)
+        if model_s is not None and total_weights_s is not None
         else None
     )
     engine_non_graph_s = (
@@ -118,8 +151,10 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
             outside_accounted_s = max(0.0, total_to_health_s - accounted_s)
 
     buckets: dict[str, float] = {}
-    if weights_s is not None:
-        buckets["weights_path"] = weights_s
+    if main_weights_s is not None:
+        buckets["main_model_weights_path"] = main_weights_s
+    if auxiliary_weights_s > 0:
+        buckets["auxiliary_draft_weights_path"] = auxiliary_weights_s
     if model_non_weight_s is not None:
         buckets["model_construct_postload"] = model_non_weight_s
     if engine_non_graph_s is not None:
@@ -139,15 +174,30 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
 
     checkpoint_gib = vals["checkpoint_gib"]
     implied_weight_gib_s = (
-        checkpoint_gib / weights_s
-        if checkpoint_gib is not None and weights_s and weights_s > 0
+        checkpoint_gib / main_weights_s
+        if checkpoint_gib is not None
+        and main_weights_s
+        and main_weights_s > 0
         else None
     )
 
+    compile_graph_s = [float(x) for x in COMPILE_GRAPH_RE.findall(text)]
+    compile_cache_dirs = COMPILE_CACHE_DIR_RE.findall(text)
+    aot_direct_load = "Directly load AOT compilation from path" in text
+    standalone_artifact_reconstruction = (
+        "reconstructed serializable fn from standalone compile artifacts"
+        in text
+    )
+
     return {
-        "schema": 1,
+        "schema": 2,
         "timings": {
-            "weights_s": weights_s,
+            "weights_s": main_weights_s,
+            "main_weights_s": main_weights_s,
+            "draft_weights_s": draft_weights_s,
+            "auxiliary_weights_s": auxiliary_weights_s,
+            "total_weights_s": total_weights_s,
+            "weight_loads_s": weight_loads_s,
             "model_total_s": model_s,
             "model_construct_postload_s": model_non_weight_s,
             "engine_init_s": engine_init_s,
@@ -156,6 +206,12 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
             "total_to_health_s": total_to_health_s,
             "accounted_model_plus_engine_s": accounted_s,
             "frontend_spawn_preflight_other_s": outside_accounted_s,
+            "torch_compile_total_s": vals["torch_compile_total_s"],
+            "compile_warmup_together_s": vals["compile_warmup_together_s"],
+            "initial_profiling_warmup_s": vals["initial_profiling_warmup_s"],
+            "dynamo_bytecode_s": vals["dynamo_bytecode_s"],
+            "compile_graph_s": compile_graph_s,
+            "compile_graph_sum_s": sum(compile_graph_s),
         },
         "checkpoint": {
             "checkpoint_gib": checkpoint_gib,
@@ -165,6 +221,16 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
             "warning": (
                 "weights_s is not pure storage throughput: it includes tensor "
                 "materialization, EXL3 weight_loader work and CPU->GPU copies."
+            ),
+        },
+        "compile_cache": {
+            "cache_dirs": compile_cache_dirs,
+            "aot_direct_load": aot_direct_load,
+            "standalone_artifact_reconstruction": (
+                standalone_artifact_reconstruction
+            ),
+            "cache_hit_evidence": bool(
+                aot_direct_load or standalone_artifact_reconstruction
             ),
         },
         "runtime_geometry": {
@@ -208,6 +274,12 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
                 "kernel warmup",
                 "non-graph compile/warmup work",
             ],
+            "weight_load_contract": (
+                "weights_s is the first/main model Loading weights record. "
+                "Any later Loading weights records are reported separately as "
+                "auxiliary/draft loads. model_construct_postload subtracts "
+                "the sum of all weight-load records from model_total_s."
+            ),
             "long_context_clue": (
                 "Compare warm 4K vs warm 161K engine_init / engine_non_graph. "
                 "A stable weights_s with a larger long-context engine phase "
