@@ -58,6 +58,9 @@ def test_q2b_patch_uses_real_generic_cpu_offload_contract(tmp_path):
     assert "vllm_generic_cpu_offload" in out
     assert "publication_staging_pages" in out
     assert "transfer_tensor_page_count" in out
+    assert "resident_cache[:resident_count].zero_()" in out
+    assert "backing.stage_in(" in out
+    assert "resident_cache[start:end].copy_(" not in out
     compile(out, str(path), "exec")
 
 
