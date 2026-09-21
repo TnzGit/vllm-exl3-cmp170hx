@@ -56,6 +56,11 @@ def test_q2_patch_default_off_and_dual_attention_contract(tmp_path):
     assert "torch.equal(ref_rows, resident_out)" in out
     assert "qsa_sparse_paged_attention" in out
     assert "_kvmem_plan is None" in out
+    assert "resident_page_tokens" in out
+    assert "full_block_tokens" in out
+    assert "resident_table_width" in out
+    assert "gathered.permute(0, 2, 1, 3)" in out
+    assert "*full_cache.shape[1:]" not in out
     compile(out, str(path), "exec")
 
 
