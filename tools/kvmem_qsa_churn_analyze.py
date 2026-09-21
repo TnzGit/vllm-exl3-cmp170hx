@@ -249,6 +249,8 @@ def analyze_context(
                 bytes_per_block = (
                     geom["main_kv_bytes_per_token"] * block_size
                 )
+                stage_in_bytes = len(stage_in) * bytes_per_block
+                stage_out_bytes = len(stage_out) * bytes_per_block
                 transitions.append(
                     {
                         "from": prev["name"],
@@ -257,7 +259,9 @@ def analyze_context(
                         "stage_in_blocks": len(stage_in),
                         "stage_out_blocks": len(stage_out),
                         "stage_in_fraction_of_budget": (
-                            len(stage_in) / len(b) if b else 0.0
+                            len(stage_in) / (budget // block_size)
+                            if budget // block_size
+                            else 0.0
                         ),
                         "stage_out_fraction_of_prev": (
                             len(stage_out) / len(a) if a else 0.0
@@ -267,11 +271,13 @@ def analyze_context(
                         ),
                         "stage_in_tokens": len(stage_in) * block_size,
                         "stage_out_tokens": len(stage_out) * block_size,
-                        "estimated_main_kv_stage_in_bytes": (
-                            len(stage_in) * bytes_per_block
+                        "estimated_main_kv_stage_in_bytes": stage_in_bytes,
+                        "estimated_main_kv_stage_out_bytes": stage_out_bytes,
+                        "estimated_main_kv_stage_in_gib": (
+                            stage_in_bytes / (1024**3)
                         ),
-                        "estimated_main_kv_stage_out_bytes": (
-                            len(stage_out) * bytes_per_block
+                        "estimated_main_kv_stage_out_gib": (
+                            stage_out_bytes / (1024**3)
                         ),
                     }
                 )
