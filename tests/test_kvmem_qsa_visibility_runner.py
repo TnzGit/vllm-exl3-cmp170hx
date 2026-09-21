@@ -63,3 +63,11 @@ def test_k1q1_runner_does_not_kill_unrelated_vllm_processes():
     src = RUNNER.read_text()
     assert "pkill" not in src
     assert 'kill -TERM -- "-$LAUNCH_PID"' in src
+
+
+
+def test_k1q1_runner_uses_wide_generation_window_without_changing_prompt():
+    src = RUNNER.read_text()
+    assert 'K1Q1_MAX_TOKENS:-512' in src
+    assert '--max-tokens "$MAXTOK"' in src
+    assert "--max-tokens 32" not in src
