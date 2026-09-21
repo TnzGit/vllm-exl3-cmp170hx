@@ -44,6 +44,12 @@ PATTERNS = {
     "available_ram_gib": re.compile(
         r"Available RAM: " + RE_FLOAT + r" GiB"
     ),
+    "available_kv_cache_gib": re.compile(
+        r"Available KV cache memory: " + RE_FLOAT + r" GiB"
+    ),
+    "attention_block_tokens": re.compile(
+        r"Setting attention block size to ([0-9]+) tokens"
+    ),
     "prefetch_s": re.compile(
         r"Prefetching checkpoint files into page cache finished in "
         + RE_FLOAT
@@ -147,6 +153,14 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
                 "materialization, EXL3 weight_loader work and CPU->GPU copies."
             ),
         },
+        "runtime_geometry": {
+            "available_kv_cache_gib": vals["available_kv_cache_gib"],
+            "effective_attention_block_tokens": (
+                int(vals["attention_block_tokens"])
+                if vals["attention_block_tokens"] is not None
+                else None
+            ),
+        },
         "exl3_prescan": {
             "records": len(prescan_ms),
             "sum_ms": sum(prescan_ms),
@@ -173,10 +187,16 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
             ],
             "engine_non_graph_contains": [
                 "memory profile forward",
-                "KV-cache sizing/allocation",
+                "hybrid KV-cache sizing/allocation",
                 "kernel warmup",
                 "non-graph compile/warmup work",
             ],
+            "long_context_clue": (
+                "Compare warm 4K vs warm 161K engine_init / engine_non_graph. "
+                "A stable weights_s with a larger long-context engine phase "
+                "implicates hybrid KV sizing/allocation/warmup rather than "
+                "checkpoint loading."
+            ),
         },
     }
 
