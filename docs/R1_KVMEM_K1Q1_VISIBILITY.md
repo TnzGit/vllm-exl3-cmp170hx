@@ -117,7 +117,7 @@ Both runs use fresh eager engines with:
 - exact same prompt token IDs
 - temperature 0
 - seed 0
-- max_tokens 32
+- max_tokens 512
 
 The installed QSA source is patched once before both engines.
 
@@ -147,17 +147,28 @@ Hard semantic gate:
 
 Classification:
 
+BASELINE_INVALID
+- full-QSA baseline does not reach the expected target answer inside the
+  measurement window;
+- no conclusion about resident visibility may be drawn.
+
+INVALID_MASK_EVIDENCE
+- mask stats are missing/incomplete, layer coverage is incomplete, accounting
+  does not close, or no historical selection was actually dropped.
+
 EXACT_PARITY_GO
+- baseline measurement is valid;
 - hard semantic gate passes;
 - baseline and masked completion token strings are exactly equal.
 
 SEMANTIC_GO_NONEXACT
+- baseline measurement is valid;
 - hard semantic gate passes;
 - exact completion tokens differ.
 
-NO_GO
-- masked target answer is wrong, baseline target is wrong, or the resident
-  visibility mask was not genuinely exercised.
+MASK_SEMANTIC_NO_GO
+- baseline reaches the target answer;
+- masked run does not.
 
 Exact token parity is useful evidence but not the hard gate. SM80
 persistent_topk tie-boundary behavior is already known to be set-nondeterministic,
@@ -200,3 +211,28 @@ resident physical-page remapping, while keeping target-only / no-MTP.
 
 GDN checkpoint/replay remains a later K2 dependency before claiming cheap
 multi-turn replay.
+
+## First hardware attempt and measurement correction
+
+The first K1-Q1 execution used max_tokens=32. Both the default-off baseline and
+the masked arm exhausted that window inside the model's <think> preamble before
+either target code was emitted.
+
+That run is measurement-invalid rather than evidence against bounded
+visibility.
+
+Its mechanism evidence remains valid:
+
+- 12/12 QSA layers covered;
+- 912 replay rows observed;
+- 1,834,100 historical selected tokens;
+- 1,722,276 resident historical selections retained;
+- 111,824 historical selections genuinely dropped;
+- historical resident selected-token hit rate 93.903%;
+- accounting invariants exact;
+- Xid delta zero;
+- QSA restore byte-identical.
+
+The rerun widens only the generation window to 512. Exact prompt token IDs,
+resident plan, 64K budget, 5% replacement policy, region size, eager/no-MTP
+engine contract and QSA visibility patch are unchanged.
