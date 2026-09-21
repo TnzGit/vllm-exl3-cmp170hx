@@ -28,7 +28,8 @@ def build_plan(
     ctx_rows = [x for x in summary["contexts"] if int(x["context"]) == context]
     if len(ctx_rows) != 1:
         raise ValueError(f"expected one K1B context row for {context}")
-    policy = ctx_rows[0]["policies"][POLICY][CAP]
+    ctx_row = ctx_rows[0]
+    policy = ctx_row["policies"][POLICY][CAP]
     turn_rows = [x for x in policy["turns"] if x["name"] == turn_name]
     if len(turn_rows) != 1:
         raise ValueError(f"expected one K1B turn named {turn_name}")
@@ -58,6 +59,12 @@ def build_plan(
         "pages_per_region": pages_per_region,
         "budget_tokens": BUDGET_TOKENS,
         "replacement_fraction": 0.05,
+        "expected_qsa_layers": int(
+            ctx_row.get("kv_geometry", {}).get(
+                "qsa_layers_observed",
+                len(ctx_row.get("layers", [])),
+            )
+        ),
         "resident_regions": sorted(resident),
         "resident_region_count": len(resident),
         "resident_pages": resident_pages,
