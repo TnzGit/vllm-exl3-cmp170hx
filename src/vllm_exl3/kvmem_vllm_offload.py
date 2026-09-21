@@ -44,6 +44,60 @@ def stable_page_digest(lineage: str, logical_page: int) -> bytes:
     ).digest()
 
 
+def single_tensor_cpu_backing(
+    *,
+    tensor: Any,
+    page_size_bytes: int,
+    num_cpu_blocks: int,
+    lineage: str,
+) -> "VllmCPUPageBacking":
+    """Build a one-layer/one-group backing over a contiguous GPU page tensor.
+
+    The generic vLLM worker flattens each leading-axis page to page_size_bytes,
+    so callers may keep a natural multidimensional KV layout as long as every
+    page is contiguous.
+    """
+
+    if page_size_bytes <= 0:
+        raise ValueError("page_size_bytes must be positive")
+    if tensor.ndim < 2:
+        raise ValueError("GPU page tensor must have a leading page dimension")
+    if not tensor.is_contiguous():
+        raise ValueError("GPU page tensor must be contiguous")
+    actual_page_bytes = tensor[0].numel() * tensor.element_size()
+    if actual_page_bytes != page_size_bytes:
+        raise ValueError(
+            f"page byte geometry mismatch: {actual_page_bytes} != {page_size_bytes}"
+        )
+
+    from vllm.v1.kv_offload.base import (
+        CanonicalKVCaches,
+        CanonicalKVCacheRef,
+        CanonicalKVCacheTensor,
+    )
+
+    kv_caches = CanonicalKVCaches(
+        tensors=[
+            CanonicalKVCacheTensor(
+                tensor=tensor,
+                page_size_bytes=page_size_bytes,
+            )
+        ],
+        group_data_refs=[
+            [
+                CanonicalKVCacheRef(
+                    tensor_idx=0,
+                    page_size_bytes=page_size_bytes,
+                )
+            ]
+        ],
+    )
+    return VllmCPUPageBacking(
+        kv_caches=kv_caches,
+        num_cpu_blocks=num_cpu_blocks,
+        lineage=lineage,
+    )
+
 class VllmCPUPageBacking:
     """Single-group K1-T adapter over vLLM generic CPU offload primitives."""
 
