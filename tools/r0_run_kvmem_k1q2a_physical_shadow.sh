@@ -245,7 +245,9 @@ for k in (
     "records","layer_count","expected_layer_count","layer_coverage_ok",
     "attention_exact_all_records","attention_max_abs","bootstrap_ok",
     "physical_geometry_ok","resident_page_tokens","full_block_tokens",
-    "resident_table_widths","cross_granularity_ratio","historical_selected",
+    "resident_table_widths","resident_cache_bytes_per_layer",
+    "resident_cache_mib_per_layer","resident_cache_gib_all_layers",
+    "cross_granularity_ratio","historical_selected",
     "historical_resident_kept","historical_selected_dropped",
     "historical_visibility_rate","accounting_ok","mask_exercised"
 ):
