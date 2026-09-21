@@ -90,6 +90,17 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
     transfer_tensor_bytes = {
         int(row["transfer_tensor_bytes"]) for row in by_layer.values()
     }
+    expected_publish_jobs = (
+        int(plan["resident_page_count"])
+        + int(plan["publication_staging_pages"])
+        - 1
+    ) // int(plan["publication_staging_pages"])
+    transfer_tensor_geometry_ok = bool(
+        len(page_size_bytes) == 1
+        and len(transfer_tensor_bytes) == 1
+        and next(iter(transfer_tensor_bytes))
+        == int(plan["transfer_tensor_page_count"]) * next(iter(page_size_bytes))
+    )
     bootstrap_sources = {
         str(row["bootstrap_source"]) for row in by_layer.values()
     }
@@ -108,6 +119,9 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
         and expected_transfer_bytes is not None
         and all(value == expected_transfer_bytes for value in d2h_bytes.values())
         and all(value == expected_transfer_bytes for value in h2d_bytes.values())
+        and len(d2h_jobs) == expected_layers
+        and all(value == expected_publish_jobs for value in d2h_jobs.values())
+        and transfer_tensor_geometry_ok
         and bootstrap_sources == {"vllm_generic_cpu_offload"}
     )
 
@@ -222,6 +236,8 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
             "d2h_publish_bytes_by_layer": d2h_bytes,
             "h2d_stage_in_bytes_by_layer": h2d_bytes,
             "d2h_publish_jobs_by_layer": d2h_jobs,
+            "expected_publish_jobs_per_layer": expected_publish_jobs,
+            "transfer_tensor_geometry_ok": transfer_tensor_geometry_ok,
             "d2h_total_bytes": d2h_total_bytes,
             "h2d_total_bytes": h2d_total_bytes,
             "d2h_total_gib": d2h_total_bytes / (1024**3),
