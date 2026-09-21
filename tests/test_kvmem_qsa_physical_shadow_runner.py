@@ -62,3 +62,11 @@ def test_q2a_runner_treats_default_block_size_as_resident_page_only():
     assert "resident_page_tokens=$PAGE_TOKENS" in src
     assert "independent of the hybrid scheduler full-cache block size" in src
     assert "kvmem-k1q2a-physical-shadow-crosspage" in src
+
+
+
+def test_q2a_runner_only_continues_numeric_nonexact_after_input_exact_gate():
+    src = RUNNER.read_text()
+    assert "VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT=1" in src
+    assert "input_mapping_exact_all_records" in src
+    assert "first_bad_input_tokens" in src
