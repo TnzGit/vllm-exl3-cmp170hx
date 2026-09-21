@@ -144,7 +144,7 @@ cmp -s "$QSA_BACKUP" "$QSA" || {
   exit 2
 }
 
-PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_qsa_shadow_patch.py"   "$REPO/tests/test_kvmem_qsa_needles.py"   "$REPO/tests/test_kvmem_qsa_shadow_summarize.py"
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_qsa_shadow_patch.py"   "$REPO/tests/test_kvmem_qsa_needles.py"   "$REPO/tests/test_kvmem_qsa_shadow_summarize.py"   "$REPO/tests/test_kvmem_qsa_shadow_runner.py"
 
 echo "=== generate exact-token needle cases ==="
 "$V/bin/python" "$REPO/tools/kvmem_qsa_make_needles.py"   --model-dir "$MODEL_DIR" --out-dir "$OUT/cases" --contexts 160000 240000
