@@ -21,6 +21,8 @@ def _plan():
         "resident_page_count": 4096,
         "active_reserve_pages": 64,
         "physical_page_count": 4160,
+        "page_tokens": 16,
+        "active_page0": 9968,
         "expected_qsa_layers": 2,
     }
 
