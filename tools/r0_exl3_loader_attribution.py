@@ -100,8 +100,11 @@ def summarize(
         final.get("direct_fill", {}).get("DIRECT_FILL_CALLS", 0)
     )
     trace_same_pid = first.get("pid") == final.get("pid")
+    proc_same_pid = proc_watch.get("pid") == first.get("pid")
     boundaries_ok = bool(
         trace_same_pid
+        and proc_same_pid
+        and kernel_window is not None
         and final["monotonic_s"] >= first["monotonic_s"]
         and direct_calls > 0
         and instrumented_copy_bytes > 0
@@ -110,6 +113,13 @@ def summarize(
     return {
         "schema": 1,
         "loader_attribution_valid": boundaries_ok,
+        "evidence_identity": {
+            "trace_same_pid": trace_same_pid,
+            "proc_same_pid": proc_same_pid,
+            "proc_window_present": kernel_window is not None,
+            "trace_pid": first.get("pid"),
+            "proc_pid": proc_watch.get("pid"),
+        },
         "startup": {
             "main_weights_s": main_weights_s,
             "draft_weights_s": draft_weights_s,
