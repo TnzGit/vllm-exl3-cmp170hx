@@ -54,7 +54,7 @@ fi
 echo "=== CPU gates ==="
 "$V/bin/python" -m py_compile   "$REPO/tools/kvmem_persistent_topk_diagnose.py"   "$REPO/tools/kvmem_qsa_sticky_replay.py"
 
-PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_kvmem_qsa_sticky_replay.py"   "$REPO/tests/test_kvmem_k1b_runner.py"
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_kvmem_qsa_sticky_replay.py"   "$REPO/tests/test_kvmem_persistent_topk_diagnose.py"   "$REPO/tests/test_kvmem_k1b_runner.py"
 
 echo "=== sticky replay over existing K1A shadows ==="
 "$V/bin/python" "$REPO/tools/kvmem_qsa_sticky_replay.py"   --manifest "$K1A_DIR/turns/manifest.json"   --shadow-dir "$K1A_DIR/shadows"   --model-config "$MODEL_DIR/config.json"   --out "$OUT/k1b_sticky_summary.json"   | tee "$OUT/k1b_sticky_summary.stdout.json"
