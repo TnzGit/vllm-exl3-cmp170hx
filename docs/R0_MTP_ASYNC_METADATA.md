@@ -69,6 +69,19 @@ python tools/apply_qwen4_exp_patches.py <site-packages/vllm> \
 
 Baseline uses the identical command without `--mtp-async-metadata`.
 
+For the qualified local R0 layout, the prepared one-shot executor is:
+
+```bash
+R0_REPO=/path/to/r0/mtp-async-metadata-backport \
+  bash tools/r0_run_mtp_async_metadata_ab.sh
+```
+
+It runs the CPU gates, BASE 4K/160K capture, ASYNC 4K A/B, exact flattened-token
+parity recheck, and only if the 4K candidate clears 3% it runs ASYNC 160K plus
+a short profiler diagnostic and `r0_trace_sync_summary.py`. The script refuses
+to start if the installed vLLM is already async-patched, to prevent a
+contaminated BASE.
+
 ## CMP170HX hardware A/B contract
 
 Use the same qualified k=3 production configuration for both cells:
