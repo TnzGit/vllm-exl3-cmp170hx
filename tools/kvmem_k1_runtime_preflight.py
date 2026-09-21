@@ -57,8 +57,15 @@ CAPABILITIES = {
 }
 
 
+def _safe_find_spec(module_name: str):
+    try:
+        return importlib.util.find_spec(module_name), None
+    except (ImportError, ModuleNotFoundError, AttributeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _probe_module(module_name: str, attrs: tuple[str, ...]) -> dict[str, Any]:
-    spec = importlib.util.find_spec(module_name)
+    spec, find_error = _safe_find_spec(module_name)
     if spec is None:
         return {
             "module": module_name,
@@ -66,7 +73,7 @@ def _probe_module(module_name: str, attrs: tuple[str, ...]) -> dict[str, Any]:
             "imported": False,
             "origin": None,
             "attrs": {name: False for name in attrs},
-            "error": "module spec not found",
+            "error": find_error or "module spec not found",
         }
 
     result: dict[str, Any] = {
@@ -111,7 +118,7 @@ def _qwen_package_root() -> Path | None:
         "vllm.models.qwen4_exp",
         "vllm.model_executor.models.qwen4_exp",
     ):
-        spec = importlib.util.find_spec(name)
+        spec, _ = _safe_find_spec(name)
         if spec is None:
             continue
         if spec.submodule_search_locations:
@@ -275,7 +282,7 @@ def main() -> int:
         "qwen4_exp": {
             "package_root": str(qwen_root) if qwen_root else None,
             "source_hits": hits,
-            "mentions_hisparse": qwen_mentions_hisparse,
+            "mentions_hisparse": bool(hits.get("HiSparse")),
         },
         "decision_support": choose_integration_route(entries, hits),
     }
