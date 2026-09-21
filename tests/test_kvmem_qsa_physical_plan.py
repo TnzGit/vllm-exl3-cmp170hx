@@ -53,6 +53,7 @@ def test_q2_plan_expands_64k_history_and_active_reserve():
     )
     assert out["resident_region_count"] == 256
     assert out["resident_page_count"] == 4096
+    assert out["resident_page_tokens"] == 16
     assert out["active_reserve_pages"] == 64
     assert out["physical_page_count"] == 4160
     assert out["active_page0"] == 159488 // 16
