@@ -45,9 +45,9 @@ def _tree(tmp_path: Path, text: str = QSA_029) -> Path:
     return root
 
 
-def _run(root: Path) -> subprocess.CompletedProcess[str]:
+def _run(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), str(root)],
+        [sys.executable, str(SCRIPT), str(root), *extra],
         text=True,
         capture_output=True,
         check=False,
@@ -84,3 +84,15 @@ def test_qsa_shadow_patch_fails_closed_on_layout_drift(tmp_path):
     assert "anchor count" in run.stderr
     qsa = root / "models" / "qwen4_exp" / "nvidia" / "qsa.py"
     assert "# KVMEM_QSA_SHADOW_V1" not in qsa.read_text(encoding="utf-8")
+
+
+def test_qsa_shadow_check_only_does_not_modify_source(tmp_path):
+    root = _tree(tmp_path)
+    qsa = root / "models" / "qwen4_exp" / "nvidia" / "qsa.py"
+    before = qsa.read_bytes()
+
+    run = _run(root, "--check-only")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "no files changed" in run.stdout
+    assert qsa.read_bytes() == before
+    assert not qsa.with_suffix(".py.kvmem_qsa_shadow.orig").exists()
