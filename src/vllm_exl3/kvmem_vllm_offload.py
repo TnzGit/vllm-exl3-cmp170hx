@@ -94,7 +94,7 @@ class VllmCPUPageBacking:
         self._next_job_id += 1
         return job_id
 
-    def _finished(self, job_id: int) -> TransferObservation:
+    def _finished(self, job_id: int) -> Any:
         rows = self.worker.get_finished()
         match = [row for row in rows if row.job_id == job_id]
         if len(match) != 1:
