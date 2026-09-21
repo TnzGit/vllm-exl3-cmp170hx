@@ -145,7 +145,7 @@ cmp -s "$QSA_BACKUP" "$QSA" || {
   exit 2
 }
 
-PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_qsa_shadow_patch.py"   "$REPO/tests/test_kvmem_qsa_turns.py"   "$REPO/tests/test_kvmem_qsa_churn_analyze.py"   "$REPO/tests/test_kvmem_qsa_churn_runner.py"
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" "$V/bin/python" -m pytest -q   "$REPO/tests/test_qsa_shadow_patch.py"   "$REPO/tests/test_kvmem_qsa_turns.py"   "$REPO/tests/test_kvmem_qsa_probe_schema.py"   "$REPO/tests/test_kvmem_qsa_churn_analyze.py"   "$REPO/tests/test_kvmem_qsa_churn_runner.py"
 
 echo "=== generate fixed-history turn suites ==="
 "$V/bin/python" "$REPO/tools/kvmem_qsa_make_turns.py"   --model-dir "$MODEL_DIR" --out-dir "$OUT/turns" --contexts 160000 240000
