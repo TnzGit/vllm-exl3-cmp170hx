@@ -473,9 +473,13 @@ def _kvmem_resident_attention(
     )
 
     exact = bool(torch.equal(ref_rows, resident_out))
-    max_abs = float(
-        (ref_rows.float() - resident_out.float()).abs().max().item()
-    )
+    _kvmem_abs_diff = (
+        ref_rows.float() - resident_out.float()
+    ).abs()
+    max_abs = float(_kvmem_abs_diff.max().item())
+    mean_abs = float(_kvmem_abs_diff.mean().item())
+    mismatch_elements = int(torch.ne(ref_rows, resident_out).sum().item())
+    attention_elements = int(ref_rows.numel())
     input_exact, input_tokens_compared, first_bad_input_token = (
         _kvmem_compare_selected_inputs(
             plan,
@@ -516,6 +520,9 @@ def _kvmem_resident_attention(
             "first_bad_input_token": first_bad_input_token,
             "attention_exact": exact,
             "attention_max_abs": max_abs,
+            "attention_mean_abs": mean_abs,
+            "attention_mismatch_elements": mismatch_elements,
+            "attention_elements": attention_elements,
         }
     )
 
@@ -621,6 +628,8 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "resident_cache_bytes",
         "input_mapping_exact",
         "input_tokens_compared",
+        "attention_mismatch_elements",
+        "attention_mean_abs",
         "VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT",
         "resident attention numerical mismatch",
     )
