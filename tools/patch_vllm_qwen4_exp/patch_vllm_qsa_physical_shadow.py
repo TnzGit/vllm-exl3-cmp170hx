@@ -430,6 +430,9 @@ def _kvmem_resident_attention(
             "resident_table_width": int(
                 getattr(layer, "_kvmem_resident_block_table_width", 0)
             ),
+            "resident_cache_bytes": int(
+                resident_cache.numel() * resident_cache.element_size()
+            ),
             "attention_exact": exact,
             "attention_max_abs": max_abs,
         }
@@ -521,6 +524,7 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "full_block_tokens",
         "resident_page_tokens",
         "resident_table_width",
+        "resident_cache_bytes",
         "resident attention mismatch",
     )
     missing = [x for x in required if x not in out]
