@@ -122,7 +122,7 @@ CALL_BLOCK = CALL_ANCHOR + """        _kvmem_qsa_shadow_record(
 """
 
 
-def patch(path: Path) -> str:
+def patch(path: Path, *, check_only: bool = False) -> str:
     src = path.read_text(encoding="utf-8")
     if MARKER in src:
         return "already patched"
@@ -134,17 +134,10 @@ def patch(path: Path) -> str:
     if src.count(CALL_ANCHOR) != 1:
         raise RuntimeError("QSA selection call anchor count != 1")
 
-    original = path.with_suffix(path.suffix + ".kvmem_qsa_shadow.orig")
-    if not original.exists():
-        original.write_text(src, encoding="utf-8")
+    patched = src.replace(IMPORT_ANCHOR, IMPORT_BLOCK, 1)
+    patched = patched.replace(HELPER_ANCHOR, HELPER, 1)
+    patched = patched.replace(CALL_ANCHOR, CALL_BLOCK, 1)
 
-    src = src.replace(IMPORT_ANCHOR, IMPORT_BLOCK, 1)
-    src = src.replace(HELPER_ANCHOR, HELPER, 1)
-    src = src.replace(CALL_ANCHOR, CALL_BLOCK, 1)
-    path.write_text(src, encoding="utf-8")
-    py_compile.compile(str(path), doraise=True)
-
-    final = path.read_text(encoding="utf-8")
     required = (
         MARKER,
         "VLLM_QWEN_KVMEM_SHADOW_PATH",
@@ -152,22 +145,35 @@ def patch(path: Path) -> str:
         "selected=selected",
         "logical_positions=side_metadata.logical_positions[:num_tokens]",
     )
-    missing = [token for token in required if token not in final]
+    missing = [token for token in required if token not in patched]
     if missing:
         raise RuntimeError(f"QSA shadow postcondition missing: {missing}")
+
+    if check_only:
+        compile(patched, str(path), "exec")
+        return "anchors/postconditions validated; no files changed"
+
+    original = path.with_suffix(path.suffix + ".kvmem_qsa_shadow.orig")
+    if not original.exists():
+        original.write_text(src, encoding="utf-8")
+
+    src = patched
+    path.write_text(src, encoding="utf-8")
+    py_compile.compile(str(path), doraise=True)
     return "patched"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("vllm_root", type=Path)
+    ap.add_argument("--check-only", action="store_true")
     args = ap.parse_args()
     target = args.vllm_root.resolve() / TARGET
     if not target.is_file():
         print(f"ERROR: missing vLLM QSA source: {target}", file=sys.stderr)
         return 2
     try:
-        status = patch(target)
+        status = patch(target, check_only=args.check_only)
     except Exception as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
