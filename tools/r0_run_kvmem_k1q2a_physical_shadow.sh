@@ -190,7 +190,7 @@ echo "api_pid=$API_PID engine_pid=$ENGINE_PID launch_pid=$LAUNCH_PID"
 if [[ -n "$ENGINE_PID" ]]; then
   echo "engine_pwd=$(readlink /proc/$ENGINE_PID/cwd)"
   tr '\0' '\n' < "/proc/$ENGINE_PID/environ" |
-    grep -E '^(ENFORCE_EAGER|NUM_SPEC_TOKENS|VLLM_QWEN_KVMEM_PHYSICAL_|VLLM_EXL3_COOP)=' || true
+    grep -E '^(ENFORCE_EAGER|NUM_SPEC_TOKENS|VLLM_QWEN_KVMEM_|VLLM_EXL3_COOP)=' || true
 fi
 if [[ -n "$API_PID" ]]; then
   tr '\0' ' ' < "/proc/$API_PID/cmdline" | grep -q -- '--enforce-eager' || {
@@ -243,7 +243,10 @@ for k in (
     print(f"{k}={d[k]}")
 for k in (
     "records","layer_count","expected_layer_count","layer_coverage_ok",
-    "attention_exact_all_records","attention_max_abs","bootstrap_ok",
+    "input_mapping_exact_all_records","input_tokens_compared",
+    "first_bad_input_tokens","attention_exact_all_records","attention_max_abs",
+    "attention_mean_abs_max_record","attention_mismatch_elements",
+    "attention_elements","attention_mismatch_fraction","bootstrap_ok",
     "physical_geometry_ok","resident_page_tokens","full_block_tokens",
     "resident_table_widths","resident_cache_bytes_per_layer",
     "resident_cache_mib_per_layer","resident_cache_gib_all_layers",
