@@ -259,6 +259,18 @@ vLLM 0.29 Qwen4Exp has:
 The NVIDIA implementation explicitly describes QSA projection weights, side
 caches and paged weight-free selection.
 
+Exact vLLM 0.29 source adds an important distinction:
+- `QSAKeyStateCache` (raw BF16 key) is intentionally a small
+  `CircularBufferSpec` that only retains the open compression group plus
+  speculative rows;
+- `QSACompressedKeyCache` is an `MLAAttentionSpec` with one normalized BF16
+  key per complete compression group.
+
+Therefore the raw-key ring is **not** a full historical retrieval index. The
+compressed-key cache is the more promising substrate. A K0 prototype may need
+to snapshot compressed group keys to CPU before their vLLM cache blocks are
+recycled if we want relevance metadata to outlive GPU KV residency.
+
 This means the first R1 experiment should **not** immediately add KVMem's
 mean-K capture.
 
