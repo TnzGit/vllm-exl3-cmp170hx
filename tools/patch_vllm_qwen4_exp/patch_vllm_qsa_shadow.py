@@ -60,9 +60,16 @@ def _kvmem_qsa_shadow_record(
 
     try:
         tail_rows = int(os.environ.get("VLLM_QWEN_KVMEM_SHADOW_ROWS", "128"))
+        min_pos = int(os.environ.get("VLLM_QWEN_KVMEM_SHADOW_MIN_POS", "-1"))
     except ValueError as exc:
-        raise RuntimeError("invalid VLLM_QWEN_KVMEM_SHADOW_ROWS") from exc
+        raise RuntimeError("invalid KVMem QSA shadow integer setting") from exc
     tail_rows = max(1, tail_rows)
+
+    if min_pos >= 0:
+        last_pos = int(logical_positions[-1].detach().item())
+        if last_pos < min_pos:
+            return
+
     start = max(0, selected.shape[0] - tail_rows)
 
     pos_cpu = (
@@ -141,6 +148,7 @@ def patch(path: Path, *, check_only: bool = False) -> str:
     required = (
         MARKER,
         "VLLM_QWEN_KVMEM_SHADOW_PATH",
+        "VLLM_QWEN_KVMEM_SHADOW_MIN_POS",
         "torch.cuda.is_current_stream_capturing()",
         "selected=selected",
         "logical_positions=side_metadata.logical_positions[:num_tokens]",
