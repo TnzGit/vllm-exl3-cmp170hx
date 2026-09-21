@@ -48,8 +48,20 @@ def summarize(
 
     baseline_correct = bool(baseline.get("target_codes_in_order"))
     masked_correct = bool(masked.get("target_codes_in_order"))
+    expected_layers = int(plan.get("expected_qsa_layers", 0))
+    layer_coverage_ok = expected_layers > 0 and len(layers) == expected_layers
+    accounting_ok = (
+        historical_kept + dropped == historical_total
+        and historical_total + active_kept == selected_total
+    )
     exercised = len(stats) > 0 and rows_applied > 0 and dropped > 0
-    semantic_go = baseline_correct and masked_correct and exercised
+    semantic_go = (
+        baseline_correct
+        and masked_correct
+        and exercised
+        and layer_coverage_ok
+        and accounting_ok
+    )
 
     return {
         "schema": 1,
@@ -69,6 +81,9 @@ def summarize(
             "records": len(stats),
             "layers": layers,
             "layer_count": len(layers),
+            "expected_layer_count": expected_layers,
+            "layer_coverage_ok": layer_coverage_ok,
+            "accounting_ok": accounting_ok,
             "rows_applied": rows_applied,
             "selected_valid_before": selected_total,
             "historical_selected": historical_total,
