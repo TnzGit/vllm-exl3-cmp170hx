@@ -199,7 +199,7 @@ def _kvmem_bootstrap_resident(layer, plan, full_cache, full_table):
         full_table.device,
         torch.int64,
     )
-    src = full_table[0].index_select(0, page_ids)
+    src = full_table[0].index_select(0, page_ids).to(torch.int64)
     if bool((src < 0).any().item()):
         raise RuntimeError("full cache lacks a historical resident page")
 
