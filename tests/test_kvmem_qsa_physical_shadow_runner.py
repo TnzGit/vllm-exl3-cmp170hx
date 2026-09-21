@@ -47,7 +47,9 @@ def test_q2a_runner_requires_physical_evidence_and_restore():
 
 def test_q2a_runner_does_not_patch_scheduler_or_enable_cpu_backing():
     src = RUNNER.read_text()
-    assert "kvmem_qsa_physical_shadow.py" in src
+    assert "patch_vllm_qsa_physical_shadow.py" in src
+    assert "kvmem_qsa_make_physical_plan.py" in src
+    assert "kvmem_qsa_physical_shadow_summarize.py" in src
     assert "CPUOffloadingWorker" not in src
     assert "CPUOffloadingManager" not in src
     assert "patch_vllm_qsa_visibility.py" not in src
