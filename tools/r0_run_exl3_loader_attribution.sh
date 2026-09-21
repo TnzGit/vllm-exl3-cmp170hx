@@ -87,6 +87,11 @@ echo "max_model_len=$MAXLEN"
 echo "num_spec_tokens=$NUM_SPEC"
 echo "gpu_mem_util=$GPU_MEM_UTIL"
 echo "reference_h2d_gib_s=$REFERENCE_H2D_GIB_S"
+INSTALLED_EXL3="$SP/vllm_exl3/exl3.py"
+test -f "$INSTALLED_EXL3"
+INSTALLED_EXL3_SHA_BEFORE=$(sha256sum "$INSTALLED_EXL3" | awk '{print $1}')
+echo "installed_exl3=$INSTALLED_EXL3"
+echo "installed_exl3_sha_before=$INSTALLED_EXL3_SHA_BEFORE"
 echo "NOTE: diagnostic source is loaded through PYTHONPATH; installed package is not modified."
 
 test -f "$MODEL_DIR/config.json"
@@ -186,6 +191,8 @@ echo "=== compact result ==="
 import json, sys
 d=json.load(open(sys.argv[1])); s=d["startup"]; e=d["exl3_trace"]; k=d["kernel_model_load_window"]
 print(f'loader_attribution_valid={d["loader_attribution_valid"]}')
+for key, value in d["evidence_identity"].items():
+    print(f"evidence_identity.{key}={value}")
 for key in ("main_weights_s","draft_weights_s","total_weights_s","checkpoint_gib"): print(f"{key}={s[key]}")
 for key in (
   "elapsed_first_copy_to_all_weights_loaded_s","direct_fill_calls","direct_fill_bytes",
@@ -218,6 +225,13 @@ echo "vllm_processes=$(pgrep -af 'VLLM::EngineCore|vllm serve' | wc -l)"
 if command -v ss >/dev/null 2>&1; then
   if ss -ltnp 2>/dev/null | grep -q ":$PORT "; then echo "port_$PORT=busy"; else echo "port_$PORT=free"; fi
 fi
+INSTALLED_EXL3_SHA_AFTER=$(sha256sum "$INSTALLED_EXL3" | awk '{print $1}')
+echo "installed_exl3_sha_after=$INSTALLED_EXL3_SHA_AFTER"
+if [[ "$INSTALLED_EXL3_SHA_AFTER" != "$INSTALLED_EXL3_SHA_BEFORE" ]]; then
+  echo "ERROR: installed EXL3 source changed" >&2
+  exit 4
+fi
+echo "installed_exl3_unchanged=true"
 echo "results=$OUT"
 echo "NOTE: stopped at main-model loader boundary; no prompt and no compile/warmup conclusion from this run."
 
