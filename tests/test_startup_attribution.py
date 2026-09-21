@@ -89,7 +89,7 @@ init engine (profile, create kv cache, warmup model) took 7.00 s
     )
     assert out["timings"]["graph_capture_s"] is None
     assert out["timings"]["engine_non_graph_s"] is None
-    assert out["phase_ranking"][0]["phase"] == "weights_path"
+    assert out["phase_ranking"][0]["phase"] == "main_model_weights_path"
 
 
 
@@ -118,6 +118,7 @@ Loading weights took 20.00 seconds
 Model loading took 40.00 GiB memory and 25.000000 seconds
 reconstructed serializable fn from standalone compile artifacts. num_artifacts=52 num_submods=1
 Directly load AOT compilation from path /tmp/aot
+Directly load the compiled graph(s) for compile range Range(start=1, end=2048) from the cache, took 0.050 s
 torch.compile took 0.62 s in total
 Initial profiling/warmup run took 1.28 s
 init engine (profile, create kv cache, warmup model) took 3.00 s
@@ -125,6 +126,7 @@ init engine (profile, create kv cache, warmup model) took 3.00 s
     )
     assert out["compile_cache"]["cache_hit_evidence"] is True
     assert out["compile_cache"]["aot_direct_load"] is True
+    assert out["compile_cache"]["compiled_graph_cache_load"] is True
     assert out["compile_cache"]["standalone_artifact_reconstruction"] is True
     assert out["timings"]["torch_compile_total_s"] == 0.62
     assert out["timings"]["initial_profiling_warmup_s"] == 1.28
@@ -146,3 +148,17 @@ init engine (profile, create kv cache, warmup model) took 5.0 s
     assert out["timings"]["auxiliary_weights_s"] == 23.0
     assert out["timings"]["total_weights_s"] == 123.0
     assert out["timings"]["model_construct_postload_s"] == 17.0
+
+
+
+def test_upstream_compile_range_timing_wording_is_supported():
+    mod = _load()
+    out = mod.parse_log(
+        """
+Loading weights took 10.0 seconds
+Model loading took 20.00 GiB memory and 12.0 seconds
+Compiling a graph for compile range Range(start=1, end=2048) takes 4.25 s
+init engine (profile, create kv cache, warmup model) took 8.0 s
+"""
+    )
+    assert out["timings"]["compile_graph_s"] == [4.25]
