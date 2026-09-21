@@ -1,4 +1,5 @@
 from vllm_exl3.kvmem_resident import (
+    ResidentGeometry,
     StickyResidentCoordinator,
     deterministic_fresh_set,
     logical_blocks_from_selected_tokens,
@@ -136,3 +137,30 @@ def test_selected_tokens_to_logical_blocks_filters_future_rows():
         block_size=256,
         history_limit=900,
     ) == (0, 1)
+
+
+def test_region_geometry_expands_to_qsa_page_table():
+    c = StickyResidentCoordinator(capacity_blocks=2)
+    c.bootstrap({1, 3})
+    geom = ResidentGeometry(region_tokens=256, page_tokens=16)
+    table = c.materialize_qsa_page_table(
+        logical_tokens=1024,
+        geometry=geom,
+    )
+    assert len(table) == 64
+
+    # Sorted bootstrap maps logical region 1 -> resident slot 0,
+    # and logical region 3 -> resident slot 1.
+    assert table[0:16] == [-1] * 16
+    assert table[16:32] == list(range(0, 16))
+    assert table[32:48] == [-1] * 16
+    assert table[48:64] == list(range(16, 32))
+
+
+def test_region_geometry_rejects_nonintegral_page_span():
+    try:
+        ResidentGeometry(region_tokens=256, page_tokens=48)
+    except ValueError as exc:
+        assert "divisible" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
