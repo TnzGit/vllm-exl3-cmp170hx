@@ -8,11 +8,41 @@ materialize as -1 for QSA sparse-attention block tables.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import floor
+from math import ceil, floor
 from typing import Collection, Mapping, Sequence
 
 
 ScoreMap = Mapping[int, int | float]
+
+
+@dataclass(frozen=True, slots=True)
+class ResidentGeometry:
+    """Relationship between planner regions and vLLM physical KV pages."""
+
+    region_tokens: int
+    page_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.region_tokens <= 0 or self.page_tokens <= 0:
+            raise ValueError("region/page token sizes must be positive")
+        if self.region_tokens % self.page_tokens:
+            raise ValueError(
+                "planner region_tokens must be divisible by KV page_tokens"
+            )
+
+    @property
+    def pages_per_region(self) -> int:
+        return self.region_tokens // self.page_tokens
+
+    def logical_page_count(self, logical_tokens: int) -> int:
+        if logical_tokens < 0:
+            raise ValueError("logical_tokens must be non-negative")
+        return ceil(logical_tokens / self.page_tokens)
+
+    def logical_region_count(self, logical_tokens: int) -> int:
+        if logical_tokens < 0:
+            raise ValueError("logical_tokens must be non-negative")
+        return ceil(logical_tokens / self.region_tokens)
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,12 +313,41 @@ class StickyResidentCoordinator:
         )
 
     def materialize_block_table(self, *, logical_page_count: int) -> list[int]:
+        """One-to-one logical-region table, useful when region == page."""
+
         if logical_page_count < 0:
             raise ValueError("logical_page_count must be non-negative")
         table = [-1] * logical_page_count
         for logical, slot in self._logical_to_slot.items():
             if logical < logical_page_count:
                 table[logical] = slot
+        return table
+
+    def materialize_qsa_page_table(
+        self,
+        *,
+        logical_tokens: int,
+        geometry: ResidentGeometry,
+    ) -> list[int]:
+        """Expand resident regions into QSA logical-page -> GPU-page mapping.
+
+        Each resident planner region owns a contiguous physical-page span.
+        Non-resident logical pages remain -1, which QSA sparse attention
+        already treats as invalid.
+        """
+
+        page_count = geometry.logical_page_count(logical_tokens)
+        table = [-1] * page_count
+        pages_per_region = geometry.pages_per_region
+
+        for logical_region, resident_slot in self._logical_to_slot.items():
+            logical_page0 = logical_region * pages_per_region
+            physical_page0 = resident_slot * pages_per_region
+            for offset in range(pages_per_region):
+                logical_page = logical_page0 + offset
+                if logical_page >= page_count:
+                    break
+                table[logical_page] = physical_page0 + offset
         return table
 
 
