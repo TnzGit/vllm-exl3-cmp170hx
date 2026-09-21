@@ -146,8 +146,11 @@ run_boot 3 "161k_warm" "$LONG_MAXLEN"
 import json, sys
 cold=json.load(open(sys.argv[1])); warm=json.load(open(sys.argv[2])); long=json.load(open(sys.argv[3]))
 keys=[
-    "weights_s","model_total_s","model_construct_postload_s",
-    "engine_init_s","graph_capture_s","engine_non_graph_s","total_to_health_s",
+    "weights_s","main_weights_s","draft_weights_s","total_weights_s",
+    "model_total_s","model_construct_postload_s",
+    "engine_init_s","graph_capture_s","engine_non_graph_s",
+    "torch_compile_total_s","initial_profiling_warmup_s",
+    "dynamo_bytecode_s","compile_graph_sum_s","total_to_health_s",
 ]
 def compare(a,b):
     rows={}
@@ -176,12 +179,21 @@ out={
         "4k_warm":warm.get("runtime_geometry"),
         "161k_warm":long.get("runtime_geometry"),
     },
+    "compile_cache":{
+        "4k_current":cold.get("compile_cache"),
+        "4k_warm":warm.get("compile_cache"),
+        "161k_warm":long.get("compile_cache"),
+    },
     "interpretation":{
         "large_4k_weight_time_drop_when_warm": bool(
             weight_ratio is not None and weight_ratio < 0.8
         ),
         "4k_warm_over_current_weights_ratio":weight_ratio,
         "161k_over_4k_warm_weights_ratio":ctx["weights_s"]["b_over_a"],
+        "4k_warm_over_current_total_weights_ratio":
+            cache["total_weights_s"]["b_over_a"],
+        "161k_over_4k_warm_total_weights_ratio":
+            ctx["total_weights_s"]["b_over_a"],
         "long_context_added_engine_init_s":ctx["engine_init_s"]["b_minus_a"],
         "long_context_added_engine_non_graph_s":ctx["engine_non_graph_s"]["b_minus_a"],
         "long_context_added_total_to_health_s":ctx["total_to_health_s"]["b_minus_a"],
