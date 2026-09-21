@@ -63,6 +63,7 @@ def test_qsa_shadow_patch_exact_layout_and_idempotence(tmp_path):
     src = qsa.read_text(encoding="utf-8")
     assert "# KVMEM_QSA_SHADOW_V1" in src
     assert "VLLM_QWEN_KVMEM_SHADOW_PATH" in src
+    assert "VLLM_QWEN_KVMEM_SHADOW_MIN_POS" in src
     assert "torch.cuda.is_current_stream_capturing()" in src
     assert "selected=selected" in src
     assert "logical_positions=side_metadata.logical_positions[:num_tokens]" in src
