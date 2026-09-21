@@ -34,6 +34,12 @@ def _stats():
             "layer_name": f"layer.{layer_id}",
             "attention_exact": True,
             "attention_max_abs": 0.0,
+            "attention_mean_abs": 0.0,
+            "attention_mismatch_elements": 0,
+            "attention_elements": 1000,
+            "input_mapping_exact": True,
+            "input_tokens_compared": 100,
+            "first_bad_input_token": None,
             "bootstrap_pages": 4096,
             "resident_physical_pages": 4160,
             "resident_page_tokens": 16,
@@ -60,6 +66,7 @@ def test_q2a_go_requires_exact_attention_and_target():
     assert out["physical_shadow_go"] is True
     assert out["classification"] == "Q2A_PHYSICAL_EXACT_GO"
     assert out["evidence"]["attention_max_abs"] == 0.0
+    assert out["evidence"]["input_mapping_exact_all_records"] is True
     assert out["evidence"]["bootstrap_ok"] is True
     assert out["evidence"]["accounting_ok"] is True
     assert out["evidence"]["physical_geometry_ok"] is True
@@ -83,7 +90,8 @@ def test_q2a_rejects_any_attention_difference():
     }
     out = mod.summarize(response, rows, _plan())
     assert out["physical_shadow_go"] is False
-    assert out["classification"] == "Q2A_PHYSICAL_NO_GO"
+    assert out["classification"] == "Q2A_MAPPING_EXACT_SEMANTIC_GO_NONEXACT"
+    assert out["physical_shadow_go"] is True
 
 
 def test_q2a_rejects_incomplete_layer_bootstrap():
@@ -97,3 +105,43 @@ def test_q2a_rejects_incomplete_layer_bootstrap():
     out = mod.summarize(response, _stats()[:1], _plan())
     assert out["physical_shadow_go"] is False
     assert out["evidence"]["layer_coverage_ok"] is False
+
+
+
+def test_q2a_rejects_byte_inexact_selected_kv_mapping():
+    mod = _load()
+    rows = _stats()
+    rows[0]["input_mapping_exact"] = False
+    rows[0]["first_bad_input_token"] = 12345
+    response = {
+        "target_codes_in_order": True,
+        "finish_reason": "stop",
+        "usage": {"completion_tokens": 109},
+        "text": "ok",
+    }
+    out = mod.summarize(response, rows, _plan())
+    assert out["physical_shadow_go"] is False
+    assert out["classification"] == "Q2A_INPUT_MAPPING_NO_GO"
+    assert out["evidence"]["first_bad_input_tokens"] == [12345]
+
+
+def test_q2a_numeric_nonexact_is_separate_when_inputs_are_byte_exact():
+    mod = _load()
+    rows = _stats()
+    rows[0]["attention_exact"] = False
+    rows[0]["attention_max_abs"] = 0.015625
+    rows[0]["attention_mean_abs"] = 0.0002
+    rows[0]["attention_mismatch_elements"] = 25
+    response = {
+        "target_codes_in_order": True,
+        "finish_reason": "stop",
+        "usage": {"completion_tokens": 109},
+        "text": "violet-harbor-31, granite-comet-72",
+    }
+    out = mod.summarize(response, rows, _plan())
+    assert out["mapping_gate"] is True
+    assert out["semantic_gate"] is True
+    assert out["physical_shadow_go"] is True
+    assert out["classification"] == "Q2A_MAPPING_EXACT_SEMANTIC_GO_NONEXACT"
+    assert out["evidence"]["attention_max_abs"] == 0.015625
+    assert out["evidence"]["input_mapping_exact_all_records"] is True
