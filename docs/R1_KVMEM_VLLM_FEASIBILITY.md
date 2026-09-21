@@ -287,6 +287,26 @@ avoid:
 
 If no, add a minimal mean-K side index as the fallback reference.
 
+## K0 hardware result
+
+K0 completed on the QSA-native selector with a strong GO result:
+
+- 8 cases across 160K / 240K
+- 12 deterministic needles
+- direct QSA token hit: 12/12
+- 128/256/512-token block recall: 12/12 at both 32K and 64K budgets
+- primary 256/64K recall: 1.0
+- primary 256/32K recall: 1.0
+- `go_signal=true`
+
+Therefore the native QSA signal is sufficiently strong to remain the preferred
+retrieval signal for the next engineering stage. An independent mean-K selector
+is not needed yet.
+
+The next experiment is K1A selection-diff economics: fixed history, changing
+queries, measuring resident-set overlap and estimated stage-in volume before any
+real KV eviction/offload code is written.
+
 ## Proposed staged program
 
 ### K0 — shadow retrieval, no inference change
@@ -403,25 +423,20 @@ Always compare:
 2. recency-only sparse baseline;
 3. QSA/KVMem sparse selector.
 
-## Why K0 should wait until current EARLY qualification finishes
+## Current stage
 
-PR #13 is:
-- small;
-- exact-parity;
-- already mechanism-proven;
-- one remaining hardware qualification.
+The exact-context R0 lane is frozen: PR #13 did not qualify.
 
-Interrupting it for a semantic sparse-KV research lane would mix two very
-different goals.
+K0 QSA-native shadow retrieval subsequently passed.
 
-Order:
+Current order:
 
-1. finish PR #13;
-2. if EARLY qualifies, normalize the exact-context production baseline;
-3. then start K0 shadow retrieval.
-
-K0 can be developed in parallel on this research branch, but GPU execution
-should begin only after the exact baseline is frozen.
+1. K0 selector feasibility — **complete / GO**;
+2. K1A resident-set churn / selection-diff economics — **current**;
+3. only if K1A is viable, implement target-only CPU-tier bounded attention KV;
+4. add recurrent/GDN replay semantics;
+5. add MTP follower semantics;
+6. consider NVMe only after CPU-tier behavior is proven.
 
 ## Expected payoff by objective
 
