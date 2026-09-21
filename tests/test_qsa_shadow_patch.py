@@ -19,7 +19,14 @@ import torch
 
 from .indexer_qsa import QSAIndexer
 
-class Owner:
+class Qwen4ExpQSAAttention:
+    def __init__(self, *, layer_id: int, prefix: str = ""):
+        self.layer_name = f"{prefix}.attn"
+        self.indexer = type("Indexer", (), {
+            "output_width": 2,
+            "skip_topk": False,
+        })()
+
     def _run_qsa(self, hidden_states, positions):
         num_tokens = 4
         side_metadata = type("M", (), {"logical_positions": torch.arange(4)})()
@@ -67,6 +74,8 @@ def test_qsa_shadow_patch_exact_layout_and_idempotence(tmp_path):
     assert "torch.cuda.is_current_stream_capturing()" in src
     assert "selected=selected" in src
     assert "logical_positions=side_metadata.logical_positions[:num_tokens]" in src
+    assert "self.layer_id" not in src
+    assert '"layer_id":' not in src
 
     backup = qsa.with_suffix(".py.kvmem_qsa_shadow.orig")
     assert backup.read_text(encoding="utf-8") == QSA_029
@@ -97,3 +106,15 @@ def test_qsa_shadow_check_only_does_not_modify_source(tmp_path):
     assert "no files changed" in run.stdout
     assert qsa.read_bytes() == before
     assert not qsa.with_suffix(".py.kvmem_qsa_shadow.orig").exists()
+
+
+def test_qsa_shadow_schema_uses_layer_name_not_instance_layer_id(tmp_path):
+    root = _tree(tmp_path)
+    run = _run(root)
+    assert run.returncode == 0, run.stdout + run.stderr
+    qsa = root / "models" / "qwen4_exp" / "nvidia" / "qsa.py"
+    src = qsa.read_text(encoding="utf-8")
+    assert "layer_name=self.layer_name" in src
+    assert "layer_id=self.layer_id" not in src
+    assert '"layer_name": str(layer_name)' in src
+    assert '"layer_id":' not in src
