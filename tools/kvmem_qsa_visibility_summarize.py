@@ -55,13 +55,24 @@ def summarize(
         and historical_total + active_kept == selected_total
     )
     exercised = len(stats) > 0 and rows_applied > 0 and dropped > 0
+    evidence_valid = exercised and layer_coverage_ok and accounting_ok
+    baseline_measurement_valid = baseline_correct
     semantic_go = (
-        baseline_correct
+        baseline_measurement_valid
         and masked_correct
-        and exercised
-        and layer_coverage_ok
-        and accounting_ok
+        and evidence_valid
     )
+
+    if not evidence_valid:
+        classification = "INVALID_MASK_EVIDENCE"
+    elif not baseline_measurement_valid:
+        classification = "BASELINE_INVALID"
+    elif not masked_correct:
+        classification = "MASK_SEMANTIC_NO_GO"
+    elif exact_token_parity is True:
+        classification = "EXACT_PARITY_GO"
+    else:
+        classification = "SEMANTIC_GO_NONEXACT"
 
     return {
         "schema": 1,
@@ -72,6 +83,8 @@ def summarize(
         "resident_region_count": plan["resident_region_count"],
         "baseline_target_correct": baseline_correct,
         "masked_target_correct": masked_correct,
+        "baseline_measurement_valid": baseline_measurement_valid,
+        "evidence_valid": evidence_valid,
         "baseline_text": baseline.get("text"),
         "masked_text": masked.get("text"),
         "exact_text_parity": baseline.get("text") == masked.get("text"),
@@ -101,13 +114,7 @@ def summarize(
             "mask_exercised": exercised,
         },
         "semantic_go": semantic_go,
-        "classification": (
-            "EXACT_PARITY_GO"
-            if semantic_go and exact_token_parity is True
-            else "SEMANTIC_GO_NONEXACT"
-            if semantic_go
-            else "NO_GO"
-        ),
+        "classification": classification,
         "note": (
             "This phase validates real-Qwen QSA semantics under the frozen "
             "sticky resident visibility plan. The full physical KV cache is "
@@ -135,7 +142,11 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
-    return 0 if result["semantic_go"] else 3
+    if result["semantic_go"]:
+        return 0
+    if result["classification"] == "BASELINE_INVALID":
+        return 4
+    return 3
 
 
 if __name__ == "__main__":
