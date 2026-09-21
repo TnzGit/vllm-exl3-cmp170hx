@@ -2,8 +2,9 @@
 # K1-Q2A: real-Qwen physical-shadow resident-cache diagnostic.
 # Full scheduler-owned QSA KV remains allocated as source/reference. A separate
 # bounded 64K resident physical cache is bootstrapped D2D and used for affected
-# query/decode attention rows. Same-forward full-cache vs resident attention
-# must be bit-exact.
+# query/decode attention rows. Selected K/V payload mapping must be byte-exact.
+# Attention exactness is measured separately because PAGE_SIZE specialization
+# can change floating evaluation order even when addressed K/V bytes are equal.
 set -euo pipefail
 
 REPO="${R0_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -12,7 +13,7 @@ V="${R0_VENV:-$R/venv}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw}"
 K1A_DIR="${K1A_DIR:-$R/results/kvmem-qsa-churn}"
 K1B_DIR="${K1B_DIR:-$R/results/kvmem-k1b-sticky}"
-OUT="${1:-$R/results/kvmem-k1q2a-physical-shadow-crosspage}"
+OUT="${1:-$R/results/kvmem-k1q2a-physical-shadow-inputcheck}"
 PORT="${PORT:-8002}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
