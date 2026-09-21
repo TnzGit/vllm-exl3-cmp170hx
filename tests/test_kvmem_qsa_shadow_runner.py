@@ -29,6 +29,8 @@ def test_k0_runner_is_eager_no_draft_and_shadow_only():
 def test_k0_runner_checks_then_restores_installed_qsa():
     src = RUNNER.read_text()
     assert "--check-only" in src
+    assert "installed QSA source is already shadow-patched" in src
+    assert "stale QSA shadow backup exists" in src
     assert 'cmp -s "$QSA_BACKUP" "$QSA"' in src
     assert "patch_vllm_qsa_shadow.py" in src
     assert "restore_qsa" in src
