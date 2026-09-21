@@ -123,8 +123,14 @@ def _kvmem_qsa_apply_resident_visibility(
     apply_min_pos = int(plan["apply_min_pos"])
     active_from_pos = int(plan["active_from_pos"])
     region_tokens = int(plan["region_tokens"])
+    if active_from_pos < apply_min_pos:
+        raise RuntimeError("KVMem resident plan active boundary precedes apply boundary")
 
-    apply_rows = logical_positions >= apply_min_pos
+    positions_device = logical_positions.to(
+        device=selected.device,
+        dtype=torch.int64,
+    )
+    apply_rows = positions_device >= apply_min_pos
     if not bool(apply_rows.any().item()):
         return selected
 
@@ -152,7 +158,7 @@ def _kvmem_qsa_apply_resident_visibility(
 
     selected.masked_fill_(drop, -1)
 
-    pos = logical_positions[apply_rows]
+    pos = positions_device[apply_rows]
     _kvmem_qsa_visibility_record(
         {
             "schema": 1,
