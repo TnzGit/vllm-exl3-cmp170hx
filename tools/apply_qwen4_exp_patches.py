@@ -11,6 +11,11 @@ Profiles:
                     main lm_head + PLE + vision split-qkv filtering
   multimodal-mtp    all three patch scripts
 
+Optional:
+  --mtp-async-metadata
+                    for an MTP profile, additionally apply the selective
+                    upstream #55054 async metadata-transfer backport
+
 The wrapper is fail-fast and verifies postconditions. It never claims a
 partially applied patch stack succeeded.
 """
@@ -49,12 +54,28 @@ def _block_has(text: str, start: str, required: tuple[str, ...], span: int = 120
     return all(token in block for token in required)
 
 
-def _verify(vllm_root: Path, profile: str) -> list[str]:
+def _verify(
+    vllm_root: Path, profile: str, *, require_async_metadata: bool = False
+) -> list[str]:
     qwen = vllm_root / "models" / "qwen4_exp" / "nvidia"
     model = (qwen / "model.py").read_text(encoding="utf-8")
     ple = (qwen / "ple_layer.py").read_text(encoding="utf-8")
     mtp = (qwen / "mtp.py").read_text(encoding="utf-8")
     errors: list[str] = []
+
+    if require_async_metadata:
+        short_conv = (
+            vllm_root / "v1" / "attention" / "backends" / "short_conv_attn.py"
+        ).read_text(encoding="utf-8")
+        for token in (
+            "spec_req_idx = async_tensor_h2d(spec_req_idx_cpu, device=query_start_loc.device)",
+            "non_spec_req_idx: torch.Tensor | None = None",
+            "decode_req_idx = async_tensor_h2d(",
+            "num_accepted_tokens = num_accepted_tokens[spec_req_idx]",
+            "assert non_spec_req_idx is not None",
+        ):
+            if token not in short_conv:
+                errors.append(f"MTP async-metadata postcondition missing: {token}")
 
     if not _block_has(
         model,
@@ -98,7 +119,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("vllm_root", type=Path)
     ap.add_argument("--profile", choices=sorted(PROFILE_PATCHES), required=True)
+    ap.add_argument(
+        "--mtp-async-metadata",
+        action="store_true",
+        help="also apply the selective upstream #55054 metadata-transfer backport",
+    )
     args = ap.parse_args()
+
+    if args.mtp_async_metadata and not args.profile.endswith("-mtp"):
+        print(
+            "ERROR: --mtp-async-metadata is valid only with an MTP profile",
+            file=sys.stderr,
+        )
+        return 2
 
     vllm_root = args.vllm_root.resolve()
     qwen = vllm_root / "models" / "qwen4_exp" / "nvidia"
@@ -107,7 +140,10 @@ def main() -> int:
         return 2
 
     patch_dir = Path(__file__).resolve().parent / "patch_vllm_qwen4_exp"
-    for name in PROFILE_PATCHES[args.profile]:
+    patch_names = list(PROFILE_PATCHES[args.profile])
+    if args.mtp_async_metadata:
+        patch_names.append("patch_vllm_mtp_async_metadata.py")
+    for name in patch_names:
         script = patch_dir / name
         if not script.is_file():
             print(f"ERROR: patch script missing: {script}", file=sys.stderr)
@@ -126,7 +162,11 @@ def main() -> int:
             )
             return result.returncode or 1
 
-    errors = _verify(vllm_root, args.profile)
+    errors = _verify(
+        vllm_root,
+        args.profile,
+        require_async_metadata=args.mtp_async_metadata,
+    )
     if errors:
         print("ERROR: patch scripts returned success but postconditions failed:", file=sys.stderr)
         for err in errors:
@@ -135,7 +175,8 @@ def main() -> int:
 
     print(
         "PASS: Qwen4Exp EXL3 patch stack applied and postconditions verified "
-        f"for profile={args.profile}"
+        f"for profile={args.profile} "
+        f"mtp_async_metadata={int(args.mtp_async_metadata)}"
     )
     return 0
 
