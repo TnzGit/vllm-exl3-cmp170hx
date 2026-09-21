@@ -144,10 +144,11 @@ def working_set(
 
 
 def kv_geometry(config: dict, qsa_layers: int) -> dict:
-    kv_heads = int(config["num_key_value_heads"])
+    text = config.get("text_config") if isinstance(config.get("text_config"), dict) else config
+    kv_heads = int(text["num_key_value_heads"])
     head_dim = int(
-        config.get("head_dim")
-        or int(config["hidden_size"]) // int(config["num_attention_heads"])
+        text.get("head_dim")
+        or int(text["hidden_size"]) // int(text["num_attention_heads"])
     )
     bytes_per_token = (
         qsa_layers
@@ -165,6 +166,11 @@ def kv_geometry(config: dict, qsa_layers: int) -> dict:
         "main_kv_bytes_per_token": bytes_per_token,
         "formula": (
             "qsa_layers * 2(K+V) * num_key_value_heads * head_dim * 2(BF16)"
+        ),
+        "stage_out_note": (
+            "stage-out bytes are an evicted-KV footprint upper bound; "
+            "with authoritative CPU backing, query-to-query eviction need not "
+            "write unchanged historical KV back to CPU"
         ),
     }
 
