@@ -12,7 +12,7 @@ V="${R0_VENV:-$R/venv}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw}"
 K1A_DIR="${K1A_DIR:-$R/results/kvmem-qsa-churn}"
 K1B_DIR="${K1B_DIR:-$R/results/kvmem-k1b-sticky}"
-OUT="${1:-$R/results/kvmem-k1q2a-physical-shadow}"
+OUT="${1:-$R/results/kvmem-k1q2a-physical-shadow-crosspage}"
 PORT="${PORT:-8002}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
@@ -161,7 +161,8 @@ from vllm.config.cache import CacheConfig
 print(CacheConfig.DEFAULT_BLOCK_SIZE)
 PY
 )
-echo "installed_page_tokens=$PAGE_TOKENS"
+echo "resident_page_tokens=$PAGE_TOKENS"
+echo "NOTE: resident page size is independent of the hybrid scheduler full-cache block size."
 
 "$V/bin/python" "$REPO/tools/kvmem_qsa_make_physical_plan.py"   --k1b-summary "$K1B_SUMMARY"   --turn-file "$TURN_FILE"   --context 160000   --turn ask_d_e   --page-tokens "$PAGE_TOKENS"   --active-reserve-tokens "$ACTIVE_RESERVE"   --out "$PLAN"   | tee "$OUT/physical_plan.stdout.json"
 
@@ -243,7 +244,8 @@ for k in (
 for k in (
     "records","layer_count","expected_layer_count","layer_coverage_ok",
     "attention_exact_all_records","attention_max_abs","bootstrap_ok",
-    "physical_geometry_ok","historical_selected",
+    "physical_geometry_ok","resident_page_tokens","full_block_tokens",
+    "resident_table_widths","cross_granularity_ratio","historical_selected",
     "historical_resident_kept","historical_selected_dropped",
     "historical_visibility_rate","accounting_ok","mask_exercised"
 ):
