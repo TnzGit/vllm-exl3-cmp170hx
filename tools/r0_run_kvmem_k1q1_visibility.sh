@@ -158,6 +158,10 @@ if grep -Fq '# KVMEM_QSA_RESIDENT_VISIBILITY_V1' "$QSA"; then
   echo "REFUSE: installed QSA is already K1-Q1 patched" >&2
   exit 2
 fi
+if grep -Fq '# KVMEM_QSA_SHADOW_V1' "$QSA"; then
+  echo "REFUSE: installed QSA still contains the older shadow patch" >&2
+  exit 2
+fi
 if [[ -e "$QSA.kvmem_qsa_visibility.orig" ]]; then
   echo "REFUSE: stale K1-Q1 QSA backup exists" >&2
   exit 2
