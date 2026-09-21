@@ -46,12 +46,13 @@ wait_healthy() {
 
 start_engine() {
   local mode=$1 log=$2 profiler_dir=${3:-}
-  local -a env_cmd=(env)
+  local -a env_unset=()
+  local -a env_vars=()
 
   if [[ "$mode" == "auto" ]]; then
-    env_cmd+=(-u EXL3_MOE_COOP_WIDE)
+    env_unset+=(-u EXL3_MOE_COOP_WIDE)
   elif [[ "$mode" == "narrow" ]]; then
-    env_cmd+=(EXL3_MOE_COOP_WIDE=0)
+    env_vars+=(EXL3_MOE_COOP_WIDE=0)
   else
     echo "bad mode: $mode" >&2
     return 2
@@ -59,14 +60,15 @@ start_engine() {
 
   if [[ -n "$profiler_dir" ]]; then
     mkdir -p "$profiler_dir"
-    env_cmd+=(TORCH_PROFILER_DIR="$profiler_dir" TORCH_PROFILER_RECORD_SHAPES=0)
+    env_vars+=(TORCH_PROFILER_DIR="$profiler_dir" TORCH_PROFILER_RECORD_SHAPES=0)
   else
-    env_cmd+=(-u TORCH_PROFILER_DIR -u TORCH_PROFILER_RECORD_SHAPES)
+    env_unset+=(-u TORCH_PROFILER_DIR -u TORCH_PROFILER_RECORD_SHAPES)
   fi
 
   VLLM_EXL3_COOP=1 MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" \
     MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 PORT="$PORT" NUM_SPEC_TOKENS=3 \
-    "${env_cmd[@]}" setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh" \
+    env "${env_unset[@]}" "${env_vars[@]}" \
+      setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh" \
       > "$log" 2>&1 < /dev/null &
   wait_healthy
 
@@ -175,8 +177,7 @@ stop_engine
 "$V/bin/python" "$REPO/tools/r0_k3_parity_recheck.py" --dir "$OUT" |
   tee "$OUT/parity.txt"
 
-"$V/bin/python" - "$OUT/ref_4096.json" "$OUT/parity_k3_4096.json" <<'PY' |
-  tee "$OUT/perf_summary.json"
+"$V/bin/python" - "$OUT/ref_4096.json" "$OUT/parity_k3_4096.json" <<'PY' | tee "$OUT/perf_summary.json"
 import json, sys
 a=json.load(open(sys.argv[1]))
 b=json.load(open(sys.argv[2]))
