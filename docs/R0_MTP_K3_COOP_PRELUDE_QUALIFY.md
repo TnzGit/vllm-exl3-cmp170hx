@@ -1,5 +1,44 @@
 # MTP k=3 cooperative-MoE EARLY prelude qualification
 
+## Final result — NOT QUALIFIED
+
+Hardware qualification completed on exact branch head
+`b162c36639ccf69e7445f99f304bae68eabe54bd`.
+
+The mechanism remains real, but it did **not** survive the production-context
+qualification gate.
+
+| context | BASE ms/output-token | EARLY ms/output-token | latency gain |
+|---|---:|---:|---:|
+| 4K | 10.085 | 9.981 | +1.031% |
+| 160K | 11.524 | 11.545 | -0.182% |
+| 240K | 11.031 | 11.044 | -0.118% |
+
+4K sentinels:
+
+| sentinel | BASE | EARLY | gain |
+|---|---:|---:|---:|
+| in | 10.256 | 10.291 | -0.341% |
+| out | 10.142 | 9.917 | +2.219% |
+
+Gate summary:
+
+- mean 4K sentinel gain: **+0.939%** — PASS
+- median context gain: **-0.118%** — FAIL (required >= +0.5%)
+- worst context gain: **-0.182%** — PASS (required >= -0.5%)
+- greedy token parity: PASS at 4K / 160K / 240K
+- denominator: VALID for every checked cell
+- preemption / fallback / Xid: 0
+- restore: frozen production source and compiled extension byte-identical after run
+- final decision: **`qualified=false`**
+
+The 4K signal is not stable enough to justify a separate production mode:
+sentinel-in was negative while sentinel-out was +2.219%, and both long-context
+cells were slightly negative. Do not create a 4K-only EARLY production profile.
+
+This line is closed as a preserved negative result. Do not revisit OUT_EMPTY or
+lower the qualification threshold.
+
 ## Candidate
 
 Qualify only:
