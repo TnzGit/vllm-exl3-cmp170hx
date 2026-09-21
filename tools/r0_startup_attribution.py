@@ -60,6 +60,10 @@ PATTERNS = {
 PRESCAN_RE = re.compile(
     r"EXL3 trellis PRESCAN ready .*? elapsed_ms=" + RE_FLOAT
 )
+KV_CAPACITY_RE = re.compile(
+    r"GPU KV cache size: ([0-9,]+) tokens, "
+    r"Maximum concurrency for ([0-9,]+) tokens per request: ([0-9.]+)x"
+)
 
 
 def _last_float(pattern: re.Pattern[str], text: str) -> float | None:
@@ -73,6 +77,16 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
     vals = {name: _last_float(pat, text) for name, pat in PATTERNS.items()}
 
     prescan_ms = [float(x) for x in PRESCAN_RE.findall(text)]
+    kv_capacity_hits = KV_CAPACITY_RE.findall(text)
+    if kv_capacity_hits:
+        kv_tokens_raw, kv_request_raw, kv_concurrency_raw = kv_capacity_hits[-1]
+        kv_cache_size_tokens = int(kv_tokens_raw.replace(",", ""))
+        kv_capacity_request_tokens = int(kv_request_raw.replace(",", ""))
+        kv_max_concurrency = float(kv_concurrency_raw)
+    else:
+        kv_cache_size_tokens = None
+        kv_capacity_request_tokens = None
+        kv_max_concurrency = None
     weights_s = vals["weights_s"]
     model_s = vals["model_s"]
     engine_init_s = vals["engine_init_s"]
@@ -155,6 +169,9 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
         },
         "runtime_geometry": {
             "available_kv_cache_gib": vals["available_kv_cache_gib"],
+            "gpu_kv_cache_size_tokens": kv_cache_size_tokens,
+            "capacity_request_tokens": kv_capacity_request_tokens,
+            "kv_max_concurrency": kv_max_concurrency,
             "effective_attention_block_tokens": (
                 int(vals["attention_block_tokens"])
                 if vals["attention_block_tokens"] is not None
