@@ -36,4 +36,5 @@ def test_k1b_runner_runs_tie_microbench_and_sticky_replay():
     assert "kvmem_persistent_topk_diagnose.py" in src
     assert "kvmem_qsa_sticky_replay.py" in src
     assert "persistent_topk_diagnosis.json" in src
+    assert "h2d_bandwidth.json" in src
     assert "k1b_sticky_summary.json" in src
