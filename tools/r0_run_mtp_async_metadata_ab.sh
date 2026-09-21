@@ -124,6 +124,16 @@ echo "=== CPU gates ==="
   "$REPO/tests/test_qwen4_exp_patch_stack.py" \
   "$REPO/tests/test_mtp_denominator_contract.py"
 
+echo "=== installed-source preflight: #55054 anchors ==="
+"$V/bin/python" "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_mtp_async_metadata.py" \
+  "$VLLM_ROOT" --check-only
+
+# The real installed source must remain byte-identical after the check-only gate.
+if ! cmp -s "$BASE_COPY" "$SHORT_CONV"; then
+  echo "REFUSE: --check-only modified installed short_conv_attn.py" >&2
+  exit 2
+fi
+
 echo "=== prepare BASE runtime ==="
 "$V/bin/python" "$REPO/tools/apply_qwen4_exp_patches.py" "$VLLM_ROOT" \
   --profile text-mtp
