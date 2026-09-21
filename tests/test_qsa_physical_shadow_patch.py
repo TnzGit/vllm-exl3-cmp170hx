@@ -53,6 +53,7 @@ def test_q2_patch_default_off_and_dual_attention_contract(tmp_path):
     assert "VLLM_QWEN_KVMEM_PHYSICAL_PLAN" in out
     assert "_kvmem_bootstrap_resident" in out
     assert "_kvmem_active_slot_mapping" in out
+    assert "_kvmem_compare_selected_inputs" in out
     assert "torch.equal(ref_rows, resident_out)" in out
     assert "qsa_sparse_paged_attention" in out
     assert "_kvmem_plan is None" in out
@@ -61,6 +62,8 @@ def test_q2_patch_default_off_and_dual_attention_contract(tmp_path):
     assert "resident_table_width" in out
     assert "gathered.permute(0, 2, 1, 3)" in out
     assert "*full_cache.shape[1:]" not in out
+    assert "input_mapping_exact" in out
+    assert "VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT" in out
     compile(out, str(path), "exec")
 
 
