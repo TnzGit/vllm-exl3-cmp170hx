@@ -87,6 +87,14 @@ def summarize(
         "evidence_valid": evidence_valid,
         "baseline_text": baseline.get("text"),
         "masked_text": masked.get("text"),
+        "baseline_finish_reason": baseline.get("finish_reason"),
+        "masked_finish_reason": masked.get("finish_reason"),
+        "baseline_completion_tokens": int(
+            (baseline.get("usage") or {}).get("completion_tokens", 0)
+        ),
+        "masked_completion_tokens": int(
+            (masked.get("usage") or {}).get("completion_tokens", 0)
+        ),
         "exact_text_parity": baseline.get("text") == masked.get("text"),
         "token_parity_available": token_parity_available,
         "exact_token_parity": exact_token_parity,
