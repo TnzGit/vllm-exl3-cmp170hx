@@ -97,10 +97,38 @@ def test_mask_must_actually_drop_historical_selection():
     }]
     out = mod.summarize(baseline, masked, stats, _plan())
     assert out["semantic_go"] is False
-    assert out["classification"] == "NO_GO"
+    assert out["classification"] == "INVALID_MASK_EVIDENCE"
 
 
-def test_wrong_masked_target_is_no_go():
+def test_baseline_failure_is_classified_as_measurement_invalid():
+    mod = _load()
+    baseline = {
+        "target_codes_in_order": False,
+        "text": "<think> truncated",
+        "logprob_tokens": ["<think>"],
+    }
+    masked = {
+        "target_codes_in_order": False,
+        "text": "<think> truncated",
+        "logprob_tokens": ["<think>"],
+    }
+    stats = [{
+        "layer_name": "layer.1",
+        "rows_applied": 1,
+        "selected_valid_before": 10,
+        "historical_selected": 10,
+        "historical_resident_kept": 8,
+        "active_selected_kept": 0,
+        "historical_selected_dropped": 2,
+    }]
+    out = mod.summarize(baseline, masked, stats, _plan())
+    assert out["baseline_measurement_valid"] is False
+    assert out["evidence_valid"] is True
+    assert out["semantic_go"] is False
+    assert out["classification"] == "BASELINE_INVALID"
+
+
+def test_wrong_masked_target_is_real_semantic_no_go():
     mod = _load()
     baseline = {
         "target_codes_in_order": True,
@@ -123,4 +151,4 @@ def test_wrong_masked_target_is_no_go():
     }]
     out = mod.summarize(baseline, masked, stats, _plan())
     assert out["semantic_go"] is False
-    assert out["classification"] == "NO_GO"
+    assert out["classification"] == "MASK_SEMANTIC_NO_GO"
