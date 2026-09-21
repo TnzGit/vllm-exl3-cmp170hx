@@ -101,6 +101,16 @@ if grep -q 'spec_req_idx = async_tensor_h2d(spec_req_idx_cpu' "$SHORT_CONV"; the
 fi
 cp "$SHORT_CONV" "$BASE_COPY"
 
+cleanup() {
+  # Always leave the machine on the exact pre-experiment short-conv source,
+  # even if a later benchmark/profiler step fails.
+  stop_engine || true
+  if [[ -f "$BASE_COPY" ]]; then
+    cp "$BASE_COPY" "$SHORT_CONV"
+  fi
+}
+trap cleanup EXIT
+
 echo "=== CPU gates ==="
 "$V/bin/python" -m py_compile \
   "$REPO/tools/apply_qwen4_exp_patches.py" \
@@ -241,6 +251,6 @@ fi
 
 echo "=== final ==="
 echo "results=$OUT"
-echo "installed_vllm_is_candidate=1"
+echo "installed_vllm_candidate_will_be_restored_by_exit_trap=1"
 echo "baseline_source_copy=$BASE_COPY"
 echo "No PR was merged and no production default was changed."
