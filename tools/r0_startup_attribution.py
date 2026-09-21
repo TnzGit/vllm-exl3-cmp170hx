@@ -75,7 +75,10 @@ PRESCAN_RE = re.compile(
     r"EXL3 trellis PRESCAN ready .*? elapsed_ms=" + RE_FLOAT
 )
 COMPILE_GRAPH_RE = re.compile(
-    r"Compiling graph\([^\n]*?\).*?took " + RE_FLOAT + r" s"
+    r"(?:Compiling graph\([^\n]*?\).*?took|"
+    r"Compiling a graph for compile range [^\n]*? takes) "
+    + RE_FLOAT
+    + r" s"
 )
 COMPILE_CACHE_DIR_RE = re.compile(
     r"Using cache directory: (\S+) for vLLM's torch\.compile"
@@ -184,6 +187,9 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
     compile_graph_s = [float(x) for x in COMPILE_GRAPH_RE.findall(text)]
     compile_cache_dirs = COMPILE_CACHE_DIR_RE.findall(text)
     aot_direct_load = "Directly load AOT compilation from path" in text
+    compiled_graph_cache_load = (
+        "Directly load the compiled graph(s) for compile range" in text
+    )
     standalone_artifact_reconstruction = (
         "reconstructed serializable fn from standalone compile artifacts"
         in text
@@ -226,11 +232,14 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
         "compile_cache": {
             "cache_dirs": compile_cache_dirs,
             "aot_direct_load": aot_direct_load,
+            "compiled_graph_cache_load": compiled_graph_cache_load,
             "standalone_artifact_reconstruction": (
                 standalone_artifact_reconstruction
             ),
             "cache_hit_evidence": bool(
-                aot_direct_load or standalone_artifact_reconstruction
+                aot_direct_load
+                or compiled_graph_cache_load
+                or standalone_artifact_reconstruction
             ),
         },
         "runtime_geometry": {
