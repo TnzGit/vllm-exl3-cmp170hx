@@ -15,6 +15,26 @@ POLICY = "b256_budget65536"
 CAP = "replace_5"
 
 
+def map_resident_page_to_full_block(
+    logical_page: int,
+    *,
+    resident_page_tokens: int,
+    full_block_tokens: int,
+) -> tuple[int, int]:
+    if logical_page < 0:
+        raise ValueError("logical_page must be non-negative")
+    if resident_page_tokens <= 0 or full_block_tokens <= 0:
+        raise ValueError("page sizes must be positive")
+    if full_block_tokens % resident_page_tokens:
+        raise ValueError("full block must be divisible by resident page size")
+    token0 = logical_page * resident_page_tokens
+    block = token0 // full_block_tokens
+    offset = token0 % full_block_tokens
+    if offset + resident_page_tokens > full_block_tokens:
+        raise ValueError("resident page crosses a full-cache block boundary")
+    return block, offset
+
+
 def build_plan(
     summary: dict,
     turn: dict,
