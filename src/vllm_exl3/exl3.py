@@ -109,6 +109,11 @@ EXL3_SUFFIXES = ("trellis", "suh", "svh", "mcg", "mul1")
 SWIGLU_LIMIT_DEFAULT = 10.0
 TEMP_ROWS_FUSED = 2048
 _COOP = os.environ.get("VLLM_EXL3_COOP", "0") == "1"
+# Diagnostic/qualification flags for eliminating framework work that is
+# provably unnecessary before the decode-shaped cooperative MoE path.
+# Defaults OFF so the accepted production path is unchanged.
+_COOP_EARLY_PRELUDE = os.environ.get("VLLM_EXL3_COOP_EARLY_PRELUDE", "0") == "1"
+_COOP_OUT_EMPTY = os.environ.get("VLLM_EXL3_COOP_OUT_EMPTY", "0") == "1"
 try:
     FAT_EXPERT_THRESHOLD = max(0, int(os.environ.get("VLLM_EXL3_FAT_THRESHOLD", "256")))
 except (TypeError, ValueError):
@@ -1918,6 +1923,127 @@ def apply_exl3_batched_fat(
     return out
 
 
+def _try_exl3_coop_early(
+    x2d: torch.Tensor,
+    weights: torch.Tensor,
+    local: torch.Tensor,
+    layer: torch.nn.Module,
+    ptrs: dict[str, torch.Tensor],
+    temps,
+    n_exp: int,
+    topk: int,
+    limit: float | None,
+    exllamav3_ext,
+) -> torch.Tensor | None:
+    """Decode-only cooperative fast prelude.
+
+    The established path builds standard/fat-fallback bookkeeping before it
+    discovers that a decode-shaped request is eligible for exl3_moe_coop.
+    For slots <= min(256, FAT_EXPERT_THRESHOLD), no expert count can exceed
+    the fat threshold, so those tensors/kernels are mathematically unnecessary.
+
+    This helper preserves the exact cooperative kernel call.  With
+    VLLM_EXL3_COOP_OUT_EMPTY=1 it also replaces the pre-kernel zero-fill of the
+    output with an uninitialized tensor; the cooperative B kernel writes every
+    output chunk, including the explicit empty-row path.
+    """
+    if not (_COOP and _COOP_EARLY_PRELUDE):
+        return None
+    if not hasattr(exllamav3_ext, "exl3_moe_coop"):
+        return None
+
+    tokens, hidden = x2d.shape
+    slots = int(tokens) * int(topk)
+    if slots < 1 or slots > 256:
+        return None
+    if FAT_EXPERT_THRESHOLD <= 0 or slots > FAT_EXPERT_THRESHOLD:
+        return None
+
+    flags = getattr(
+        layer,
+        "_exl3_codebook_flags",
+        (True, False, True, False, True, False),
+    )
+    mcg, mul1 = bool(flags[0]), bool(flags[1])
+    inter_dim = int(temps[2].shape[-1])
+    if not (
+        all(
+            bool(flags[i]) == mcg and bool(flags[i + 1]) == mul1
+            for i in range(0, 6, 2)
+        )
+        and hidden % 128 == 0
+        and inter_dim % 128 == 0
+    ):
+        return None
+
+    k = int(getattr(layer, "_exl3_k", 4))
+    smax = 4 * slots
+    dev = x2d.device
+    xh = x2d.contiguous().half()
+    sel_c = local.reshape(tokens, topk).to(torch.int64).contiguous()
+    rw_c = weights.reshape(tokens, topk).to(dtype=torch.float16).contiguous()
+
+    had_g = torch.empty((slots, hidden), dtype=torch.float16, device=dev)
+    had_u = torch.empty_like(had_g)
+    gu_g = torch.empty((smax, 1, inter_dim), dtype=torch.float16, device=dev)
+    gu_u = torch.empty_like(gu_g)
+    act_out = torch.empty_like(gu_g)
+    d_out = torch.empty((smax, 1, hidden), dtype=torch.float32, device=dev)
+    ctr = torch.zeros(
+        smax * (inter_dim // 128)
+        + tokens * (hidden // 128)
+        + 2 * smax
+        + 3,
+        dtype=torch.int32,
+        device=dev,
+    )
+    out = (
+        torch.empty(tokens, hidden, dtype=torch.float32, device=dev)
+        if _COOP_OUT_EMPTY
+        else torch.zeros(tokens, hidden, dtype=torch.float32, device=dev)
+    )
+
+    exllamav3_ext.exl3_moe_coop(
+        xh,
+        sel_c,
+        rw_c,
+        0,
+        int(n_exp),
+        hidden,
+        ptrs["gate_trellis"],
+        ptrs["gate_suh"],
+        ptrs["gate_svh"],
+        ptrs["up_trellis"],
+        ptrs["up_suh"],
+        ptrs["up_svh"],
+        ptrs["down_trellis"],
+        ptrs["down_suh"],
+        ptrs["down_svh"],
+        None,
+        None,
+        None,
+        k,
+        k,
+        k,
+        mcg,
+        mul1,
+        MOE_ACT_SILU,
+        float(limit) if (limit is not None and limit > 0) else 0.0,
+        True,
+        had_g,
+        had_u,
+        gu_g,
+        gu_u,
+        act_out,
+        d_out,
+        ctr,
+        out,
+        None,
+        None,
+    )
+    return out
+
+
 def apply_exl3_fused_moe(
     x2d: torch.Tensor,
     ids: torch.Tensor,
@@ -1968,6 +2094,22 @@ def apply_exl3_fused_moe(
 
     local = map_topk_to_local(ids, n_exp, expert_map)
     topk = int(ids.shape[-1])
+
+    early_out = _try_exl3_coop_early(
+        x2d,
+        weights,
+        local,
+        layer,
+        ptrs,
+        temps,
+        n_exp,
+        topk,
+        limit,
+        exllamav3_ext,
+    )
+    if early_out is not None:
+        return early_out
+
     flat_token = torch.arange(tokens, device=x2d.device, dtype=torch.long).repeat_interleave(topk)
     flat_weight = weights.reshape(-1).to(dtype=torch.float16)
     # scatter_add stays on GPU. torch.bincount can host-stage and break CUDA graphs.
