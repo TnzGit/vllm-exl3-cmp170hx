@@ -1,5 +1,15 @@
 # CMP170HX Qwen3.8-Flash-Next EXL3 bring-up
 
+> **Current R0 status (2026-09-21):** later qualification supersedes the early
+> no-draft service decision recorded near the end of this bring-up document.
+> The qualified production candidate is now **MTP k=3 + VLLM_EXL3_COOP=1 +
+> PIECEWISE**, healthy through 240K with full greedy token-ID parity. Historical
+> MTP TPOT values that used stream-chunk count as the token denominator are
+> invalidated. See `R0_MTP_POST_COOP.md`, `R0_MTP_K3_PRODUCTION.md`, and
+> `R0_MTP_K3_AMDAHL.md`. The next selective-backport experiment is upstream
+> vLLM #55054; see `R0_MTP_ASYNC_METADATA.md`.
+
+
 This document defines the CMP170HX research contract for serving
 Qwen3.8-Flash-Next EXL3 through `vllm-exl3`.
 
