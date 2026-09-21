@@ -43,3 +43,10 @@ def test_runner_keeps_formal_perf_profiler_off_and_traces_all_modes():
     assert "capture_trace early" in src
     assert "capture_trace empty" in src
     assert "r0_coop_prelude_compare.py" in src
+
+
+def test_runner_derives_ld_library_path_for_extension_import():
+    src = RUNNER.read_text()
+    assert 'LIB_DIRS=("$SP/torch/lib")' in src
+    assert 'for d in "$SP"/nvidia/*/lib' in src
+    assert 'export LD_LIBRARY_PATH="$LIB_PATH' in src
