@@ -89,10 +89,10 @@ def test_early_coop_fails_closed_when_fat_route_could_exist(monkeypatch):
     assert ext.calls == []
 
 
-def test_out_empty_is_opt_in_only():
+def test_qualification_branch_drops_output_empty_probe():
     src = (
         __import__("pathlib").Path(exl3.__file__).read_text(encoding="utf-8")
     )
-    assert 'VLLM_EXL3_COOP_OUT_EMPTY' in src
-    assert "if _COOP_OUT_EMPTY" in src
-    assert "else torch.zeros(tokens, hidden" in src
+    assert "VLLM_EXL3_COOP_OUT_EMPTY" not in src
+    assert "_COOP_OUT_EMPTY" not in src
+    assert "out = torch.zeros(tokens, hidden, dtype=torch.float32, device=dev)" in src
