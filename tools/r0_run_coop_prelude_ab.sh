@@ -20,6 +20,19 @@ BASE_SHA="f2c6a719a1709ba40d08b97a4cc8d64b3c2256d8"
 export CUDA_HOME="${CUDA_HOME:-$V/lib/python3.12/site-packages/nvidia/cu13}"
 export PATH="$CUDA_HOME/bin:$V/bin:$PATH"
 export VIRTUAL_ENV="$V"
+
+SP="$("$V/bin/python" - <<'PY'
+import site
+print(site.getsitepackages()[0])
+PY
+)"
+LIB_DIRS=("$SP/torch/lib")
+for d in "$SP"/nvidia/*/lib; do
+  [[ -d "$d" ]] && LIB_DIRS+=("$d")
+done
+LIB_PATH="$(IFS=:; echo "${LIB_DIRS[*]}")"
+export LD_LIBRARY_PATH="$LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 mkdir -p "$OUT"
 
 INSTALLED_PLUGIN=""
