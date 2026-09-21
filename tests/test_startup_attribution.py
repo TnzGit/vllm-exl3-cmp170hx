@@ -22,6 +22,8 @@ INFO EXL3 trellis PRESCAN ready layer=0 experts=64 tensors=192 shards=4 provider
 INFO EXL3 trellis PRESCAN ready layer=1 experts=64 tensors=192 shards=4 provider=no elapsed_ms=30.0
 INFO Loading weights took 40.00 seconds
 INFO Model loading took 52.00 GiB memory and 50.000000 seconds
+INFO Available KV cache memory: 9.75 GiB
+INFO Setting attention block size to 1568 tokens to ensure that attention page size is >= mamba page size.
 INFO Graph capturing finished in 12 secs, took 1.00 GiB
 INFO init engine (profile, create kv cache, warmup model) took 30.00 s
 """
@@ -34,6 +36,8 @@ INFO init engine (profile, create kv cache, warmup model) took 30.00 s
     assert out["timings"]["engine_non_graph_s"] == 18.0
     assert out["timings"]["graph_capture_s"] == 12.0
     assert out["timings"]["frontend_spawn_preflight_other_s"] == 10.0
+    assert out["runtime_geometry"]["available_kv_cache_gib"] == 9.75
+    assert out["runtime_geometry"]["effective_attention_block_tokens"] == 1568
     assert out["exl3_prescan"]["sum_ms"] == 50.0
     assert out["phase_ranking"][0]["phase"] == "weights_path"
 
@@ -64,3 +68,17 @@ init engine (profile, create kv cache, warmup model) took 7.00 s
     assert out["timings"]["graph_capture_s"] is None
     assert out["timings"]["engine_non_graph_s"] is None
     assert out["phase_ranking"][0]["phase"] == "weights_path"
+
+
+
+def test_runtime_geometry_is_optional_when_logs_do_not_emit_it():
+    mod = _load()
+    out = mod.parse_log(
+        """
+Loading weights took 20.00 seconds
+Model loading took 40.00 GiB memory and 25.000000 seconds
+init engine (profile, create kv cache, warmup model) took 7.00 s
+"""
+    )
+    assert out["runtime_geometry"]["available_kv_cache_gib"] is None
+    assert out["runtime_geometry"]["effective_attention_block_tokens"] is None
