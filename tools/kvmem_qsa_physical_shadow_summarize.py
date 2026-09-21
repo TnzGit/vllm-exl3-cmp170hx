@@ -117,6 +117,8 @@ def summarize(response: dict, stats: list[dict], plan: dict) -> dict:
         "schema": 1,
         "classification": classification,
         "physical_shadow_go": go,
+        "physical_mapping_go": mapping_gate,
+        "semantic_go": semantic_gate,
         "mapping_gate": mapping_gate,
         "semantic_gate": semantic_gate,
         "target_correct": target_correct,
