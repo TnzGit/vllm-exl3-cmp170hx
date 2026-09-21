@@ -147,13 +147,14 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "VLLM_QWEN_KVMEM_SHADOW_PATH",
         "VLLM_QWEN_KVMEM_SHADOW_MIN_POS",
         "torch.cuda.is_current_stream_capturing()",
+        "layer_name=self.layer_name",
         "selected=selected",
         "logical_positions=side_metadata.logical_positions[:num_tokens]",
     )
     missing = [token for token in required if token not in patched]
     if missing:
         raise RuntimeError(f"QSA shadow postcondition missing: {missing}")
-    if "self.layer_id" in patched:
+    if "layer_id=self.layer_id" in patched:
         raise RuntimeError(
             "QSA shadow patch must not depend on Qwen4ExpQSAAttention.self.layer_id"
         )
