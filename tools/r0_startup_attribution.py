@@ -96,8 +96,60 @@ def _last_float(pattern: re.Pattern[str], text: str) -> float | None:
     return float(hits[-1])
 
 
+def _all_floats(pattern: re.Pattern[str], text: str) -> list[float]:
+    return [float(x) for x in pattern.findall(text)]
+
+
+def _aot_artifact_id(path: str) -> str | None:
+    marker = "/torch_aot_compile/"
+    if marker not in path:
+        return None
+    tail = path.split(marker, 1)[1]
+    ident = tail.split("/", 1)[0]
+    return ident or None
+
+
+def _compile_component_metrics(text: str) -> dict[str, dict[str, list[float]]]:
+    metrics = {
+        "backbone": {
+            "torch_compile_s": [],
+            "initial_profiling_warmup_s": [],
+            "dynamo_bytecode_s": [],
+            "compile_graph_s": [],
+        },
+        "eagle_head": {
+            "torch_compile_s": [],
+            "initial_profiling_warmup_s": [],
+            "dynamo_bytecode_s": [],
+            "compile_graph_s": [],
+        },
+    }
+    line_patterns = {
+        "torch_compile_s": re.compile(
+            r"torch\.compile took " + RE_FLOAT + r" s in total"
+        ),
+        "initial_profiling_warmup_s": re.compile(
+            r"Initial profiling/warmup run took " + RE_FLOAT + r" s"
+        ),
+        "dynamo_bytecode_s": re.compile(
+            r"Dynamo bytecode transform time: " + RE_FLOAT + r" s"
+        ),
+        "compile_graph_s": COMPILE_GRAPH_RE,
+    }
+    for line in text.splitlines():
+        component = "eagle_head" if "eagle_head" in line else "backbone"
+        for name, pattern in line_patterns.items():
+            hit = pattern.search(line)
+            if hit:
+                metrics[component][name].append(float(hit.group(1)))
+    return metrics
+
+
 def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
     vals = {name: _last_float(pat, text) for name, pat in PATTERNS.items()}
+    compile_components = _compile_component_metrics(text)
+    backbone_compile = compile_components["backbone"]
+    eagle_compile = compile_components["eagle_head"]
 
     weight_loads_s = [float(x) for x in WEIGHTS_RE.findall(text)]
     main_weights_s = weight_loads_s[0] if weight_loads_s else None
@@ -186,6 +238,20 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
 
     compile_graph_s = [float(x) for x in COMPILE_GRAPH_RE.findall(text)]
     compile_cache_dirs = COMPILE_CACHE_DIR_RE.findall(text)
+    aot_saved_paths = re.findall(
+        r"saved AOT compiled function to (\S+)", text
+    )
+    aot_loaded_paths = re.findall(
+        r"Directly load AOT compilation from path (\S+)", text
+    )
+    aot_saved_ids = [
+        ident for path in aot_saved_paths
+        if (ident := _aot_artifact_id(path)) is not None
+    ]
+    aot_loaded_ids = [
+        ident for path in aot_loaded_paths
+        if (ident := _aot_artifact_id(path)) is not None
+    ]
     aot_direct_load = "Directly load AOT compilation from path" in text
     compiled_graph_cache_load = (
         "Directly load the compiled graph(s) for compile range" in text
@@ -212,12 +278,23 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
             "total_to_health_s": total_to_health_s,
             "accounted_model_plus_engine_s": accounted_s,
             "frontend_spawn_preflight_other_s": outside_accounted_s,
-            "torch_compile_total_s": vals["torch_compile_total_s"],
+            "torch_compile_total_s": (
+                backbone_compile["torch_compile_s"][0]
+                if backbone_compile["torch_compile_s"] else None
+            ),
             "compile_warmup_together_s": vals["compile_warmup_together_s"],
-            "initial_profiling_warmup_s": vals["initial_profiling_warmup_s"],
-            "dynamo_bytecode_s": vals["dynamo_bytecode_s"],
+            "initial_profiling_warmup_s": (
+                backbone_compile["initial_profiling_warmup_s"][0]
+                if backbone_compile["initial_profiling_warmup_s"] else None
+            ),
+            "dynamo_bytecode_s": (
+                backbone_compile["dynamo_bytecode_s"][0]
+                if backbone_compile["dynamo_bytecode_s"] else None
+            ),
             "compile_graph_s": compile_graph_s,
             "compile_graph_sum_s": sum(compile_graph_s),
+            "backbone_compile": backbone_compile,
+            "eagle_head_compile": eagle_compile,
         },
         "checkpoint": {
             "checkpoint_gib": checkpoint_gib,
@@ -231,6 +308,10 @@ def parse_log(text: str, wall: dict[str, Any] | None = None) -> dict[str, Any]:
         },
         "compile_cache": {
             "cache_dirs": compile_cache_dirs,
+            "aot_saved_paths": aot_saved_paths,
+            "aot_loaded_paths": aot_loaded_paths,
+            "aot_saved_ids": aot_saved_ids,
+            "aot_loaded_ids": aot_loaded_ids,
             "aot_direct_load": aot_direct_load,
             "compiled_graph_cache_load": compiled_graph_cache_load,
             "standalone_artifact_reconstruction": (
