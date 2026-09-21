@@ -178,7 +178,7 @@ XID0=$(xid_now); XID0=${XID0:-0}
 echo "xid_before=$XID0"
 
 echo "=== start one physical-shadow engine ==="
-VLLM_QWEN_KVMEM_PHYSICAL_PLAN="$PLAN" VLLM_QWEN_KVMEM_PHYSICAL_STATS_PATH="$STATS" ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 PORT="$PORT"   setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh"   > "$OUT/logs/serve_physical.log" 2>&1 < /dev/null &
+VLLM_QWEN_KVMEM_PHYSICAL_PLAN="$PLAN" VLLM_QWEN_KVMEM_PHYSICAL_STATS_PATH="$STATS" VLLM_QWEN_KVMEM_CONTINUE_INPUT_EXACT_NONEXACT=1 ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 PORT="$PORT"   setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh"   > "$OUT/logs/serve_physical.log" 2>&1 < /dev/null &
 LAUNCH_PID=$!
 
 wait_healthy
