@@ -30,7 +30,7 @@ class Builder:
             req_group = torch.full(
                 (m.num_reqs,),
                 2,
-                dtype=torch.int32,
+                dtype=torch.int64,
                 device=query_start_loc.device,
             )
             req_group[spec_req_idx] = 0
@@ -59,9 +59,9 @@ def _tree(tmp_path: Path, text: str = SHORT_CONV_029) -> tuple[Path, Path]:
     return root, target
 
 
-def _run(root: Path) -> subprocess.CompletedProcess[str]:
+def _run(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), str(root)],
+        [sys.executable, str(SCRIPT), str(root), *extra],
         text=True,
         capture_output=True,
         check=False,
@@ -122,3 +122,34 @@ def test_async_metadata_backport_requires_existing_async_helper_import(tmp_path)
     assert run.returncode != 0
     assert "lacks async_tensor_h2d import" in run.stderr
     assert target.read_text() == before
+
+
+def test_async_metadata_backport_preserves_req_group_dtype(tmp_path):
+    # Upstream vLLM v0.29.0 uses int64 here. The backport must not rewrite
+    # this unrelated dtype while inserting the async request-index transfers.
+    root, target = _tree(tmp_path, SHORT_CONV_029)
+    run = _run(root)
+    assert run.returncode == 0, run.stdout + run.stderr
+    src = target.read_text()
+    assert "dtype=torch.int64" in src
+    assert "dtype=torch.int32" not in src
+
+
+def test_async_metadata_backport_also_accepts_legacy_int32_layout(tmp_path):
+    legacy = SHORT_CONV_029.replace("dtype=torch.int64", "dtype=torch.int32")
+    root, target = _tree(tmp_path, legacy)
+    run = _run(root)
+    assert run.returncode == 0, run.stdout + run.stderr
+    src = target.read_text()
+    assert "dtype=torch.int32" in src
+    assert "req_group[decode_req_idx] = 1" in src
+
+
+def test_async_metadata_backport_check_only_validates_without_writing(tmp_path):
+    root, target = _tree(tmp_path, SHORT_CONV_029)
+    before = target.read_text()
+    run = _run(root, "--check-only")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "no files changed" in run.stdout
+    assert target.read_text() == before
+    assert not target.with_suffix(target.suffix + ".orig").exists()
