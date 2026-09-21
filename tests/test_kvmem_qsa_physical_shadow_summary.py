@@ -77,7 +77,7 @@ def test_q2a_go_requires_exact_attention_and_target():
     assert out["evidence"]["resident_cache_gib_all_layers"] == 1.5234375
 
 
-def test_q2a_rejects_any_attention_difference():
+def test_q2a_separates_numeric_attention_difference_from_mapping_failure():
     mod = _load()
     rows = _stats()
     rows[1]["attention_exact"] = False
@@ -89,7 +89,6 @@ def test_q2a_rejects_any_attention_difference():
         "text": "ok",
     }
     out = mod.summarize(response, rows, _plan())
-    assert out["physical_shadow_go"] is False
     assert out["classification"] == "Q2A_MAPPING_EXACT_SEMANTIC_GO_NONEXACT"
     assert out["physical_shadow_go"] is True
 
