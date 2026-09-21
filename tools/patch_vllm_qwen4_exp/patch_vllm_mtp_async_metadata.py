@@ -36,13 +36,6 @@ OLD_NEW = (
     ),
     (
         """            req_group = torch.full(
-                (m.num_reqs,),
-                2,
-                dtype=torch.int32,
-                device=query_start_loc.device,
-            )
-            req_group[spec_req_idx] = 0
-            req_group[decode_req_idx_cpu.to(query_start_loc.device)] = 1
 """,
         """            non_spec_req_idx = async_tensor_h2d(
                 non_spec_req_idx_cpu, device=query_start_loc.device
@@ -51,13 +44,12 @@ OLD_NEW = (
                 decode_req_idx_cpu, device=query_start_loc.device
             )
             req_group = torch.full(
-                (m.num_reqs,),
-                2,
-                dtype=torch.int32,
-                device=query_start_loc.device,
-            )
-            req_group[spec_req_idx] = 0
-            req_group[decode_req_idx] = 1
+""",
+    ),
+    (
+        """            req_group[decode_req_idx_cpu.to(query_start_loc.device)] = 1
+""",
+        """            req_group[decode_req_idx] = 1
 """,
     ),
     (
@@ -82,18 +74,36 @@ OLD_NEW = (
 PATCHED_MARKERS = (
     "spec_req_idx = async_tensor_h2d(spec_req_idx_cpu, device=query_start_loc.device)",
     "non_spec_req_idx: torch.Tensor | None = None",
+    "non_spec_req_idx = async_tensor_h2d(",
     "decode_req_idx = async_tensor_h2d(",
+    "req_group[decode_req_idx] = 1",
     "num_accepted_tokens = num_accepted_tokens[spec_req_idx]",
     "assert non_spec_req_idx is not None",
 )
 
+FORBIDDEN_SYNC_MARKERS = (
+    "spec_req_idx_cpu.to(query_start_loc.device)",
+    "non_spec_req_idx_cpu.to(query_start_loc.device)",
+    "decode_req_idx_cpu.to(query_start_loc.device)",
+    "spec_req_idx_cpu.to(num_accepted_tokens.device)",
+    "non_spec_req_idx_cpu.to(num_computed_tokens.device)",
+)
+
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: patch_vllm_mtp_async_metadata.py <site-packages/vllm>", file=sys.stderr)
+    check_only = False
+    argv = sys.argv[1:]
+    if "--check-only" in argv:
+        check_only = True
+        argv = [arg for arg in argv if arg != "--check-only"]
+    if len(argv) != 1:
+        print(
+            "usage: patch_vllm_mtp_async_metadata.py <site-packages/vllm> [--check-only]",
+            file=sys.stderr,
+        )
         return 2
 
-    root = Path(sys.argv[1]).resolve()
+    root = Path(argv[0]).resolve()
     path = root / "v1" / "attention" / "backends" / "short_conv_attn.py"
     if not path.is_file():
         print(f"ERROR: target not found: {path}", file=sys.stderr)
@@ -130,7 +140,22 @@ def main() -> int:
         print(f"ERROR: postcondition markers missing: {missing}", file=sys.stderr)
         return 1
 
+    residual_sync = [marker for marker in FORBIDDEN_SYNC_MARKERS if marker in out]
+    if residual_sync:
+        print(
+            f"ERROR: synchronous metadata-transfer markers remain: {residual_sync}",
+            file=sys.stderr,
+        )
+        return 1
+
     compile(out, str(path), "exec")
+
+    if check_only:
+        print(
+            f"PASS: #55054 anchors/postconditions validated against {path}; "
+            "no files changed"
+        )
+        return 0
 
     backup = path.with_suffix(path.suffix + ".orig")
     if not backup.exists():
