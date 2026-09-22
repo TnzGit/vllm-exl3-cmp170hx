@@ -31,6 +31,7 @@ def _boot():
     return {
         "classification": "Q2C_DUAL_POOL_BOOT_GO",
         "dual_pool_boot_gate": True,
+        "expected": {"private_qsa_bytes": 7 * 2 * 32768},
     }
 
 
@@ -49,6 +50,9 @@ def _worker(layer):
         "d2h_bytes": 4 * 32768, "d2h_jobs": 2,
         "h2d_bytes": 4 * 32768, "h2d_jobs": 2,
         "staging_pages": 2, "staging_bytes": 2 * 32768,
+        "private_cache_blocks": 7,
+        "private_cache_storage_bytes": 7 * 2 * 32768,
+        "private_cache_block_stride_bytes": 2 * 32768,
     }
 
 
