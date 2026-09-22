@@ -41,5 +41,6 @@ def test_promote_q2b_plan_keeps_frozen_geometry():
     assert out["resident_page_count"] == 4096
     assert out["active_page0"] == 10000
     assert out["active_reserve_pages"] == 64
+    assert out["scheduler_chunk_tokens"] == 1024
     assert out["physical_page_count"] == 4160
     validate_runtime_plan(out)
