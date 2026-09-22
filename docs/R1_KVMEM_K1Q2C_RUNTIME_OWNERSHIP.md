@@ -77,7 +77,8 @@ The transient reference is one staging chunk, not a persistent resident shadow.
 - 4096 retained pages/layer publish and restore through generic CPU backing;
 - D2H and H2D each exactly 128 MiB/layer, 32 jobs at 128 pages/job;
 - restored CPU bytes exactly match bytes destroyed from the scheduler cache;
-- progressive prefill visibility is exercised (`prefill_historical_selected_dropped > 0`);\n- boundary/query visibility accounting is exercised (`historical_selected_dropped > 0`);
+- progressive prefill visibility is exercised (`prefill_historical_selected_dropped > 0`);
+- boundary/query visibility accounting is exercised (`historical_selected_dropped > 0`);
 - frozen target codes remain correct and request finishes with `stop`;
 - Xid delta = 0 and installed QSA restores byte-for-byte.
 
@@ -88,6 +89,8 @@ A GO does not yet establish:
 - 240K runtime;
 - multi-request concurrency scaling;
 - MTP follower correctness;
+- causal resident selection without future-turn knowledge;
+- exact hidden-state/token parity against full-history prefill;
 - dynamic sticky replacement across multiple turns;
 - production latency/TTFT;
 - an engine-start arena allocation reduction (vLLM still preallocates its
