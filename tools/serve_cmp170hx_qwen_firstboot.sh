@@ -20,6 +20,7 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8002}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"
 
 if [[ "$PORT" == "8000" && "${ALLOW_PORT_8000:-0}" != "1" ]]; then
   echo "REFUSE: port 8000 is reserved for the existing production service." >&2
@@ -87,6 +88,9 @@ ARGS=(
   --gpu-memory-utilization "$GPU_MEM_UTIL"
   --compilation-config "$COMPILATION_CONFIG"
 )
+if [[ -n "$MAX_NUM_BATCHED_TOKENS" ]]; then
+  ARGS+=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")
+fi
 
 # NUM_SPEC_TOKENS=0 keeps the no-draft profile; any other value enables the
 # Qwen4Exp MTP draft. Requires the text-mtp patch stack. Prefix caching stays
@@ -129,6 +133,7 @@ printf '  %-28s %s\n' \
   "GPU_MEM_UTIL" "$GPU_MEM_UTIL" \
   "MAX_MODEL_LEN" "$MAX_MODEL_LEN" \
   "MAX_NUM_SEQS" "$MAX_NUM_SEQS" \
+  "MAX_NUM_BATCHED_TOKENS" "${MAX_NUM_BATCHED_TOKENS:-<auto>}" \
   "PORT" "$PORT" \
   "NUM_SPEC_TOKENS" "$NUM_SPEC_TOKENS" \
   "VLLM_EXL3_MODEL_DIR" "$VLLM_EXL3_MODEL_DIR" \
