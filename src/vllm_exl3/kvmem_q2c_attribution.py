@@ -59,12 +59,33 @@ def apply_progressive_visibility(
     valid_before = int(valid.sum().item())
     historical_total = int((valid & historical).sum().item())
     would_drop_count = int(would_drop.sum().item())
+    valid_pages = pages[valid]
+    historical_pages = pages[valid & historical]
+    nonresident_historical_pages = pages[valid & historical & ~keep_resident]
+    current_pages = torch.div(pos, page_tokens, rounding_mode="floor")
+
+    def _unique_count(values: torch.Tensor) -> int:
+        return int(torch.unique(values).numel()) if values.numel() else 0
+
+    unique_pages_before = _unique_count(valid_pages)
+    unique_historical_pages_before = _unique_count(historical_pages)
+    unique_nonresident_historical_pages_before = _unique_count(
+        nonresident_historical_pages
+    )
+    unique_with_writes_before = _unique_count(
+        torch.cat((valid_pages, current_pages))
+    )
     if apply_mask:
         selected.masked_fill_(would_drop, -1)
 
     post_valid = selected >= 0
     post = selected.clamp_min(0).to(torch.int64)
     post_values = post * post_valid.to(torch.int64)
+    post_pages = torch.div(post, page_tokens, rounding_mode="floor")[post_valid]
+    unique_pages_after = _unique_count(post_pages)
+    unique_with_writes_after = _unique_count(
+        torch.cat((post_pages, current_pages))
+    )
     row_weights = torch.arange(
         1, selected.shape[0] + 1, dtype=torch.int64, device=selected.device
     ).reshape(-1, 1)
@@ -84,6 +105,14 @@ def apply_progressive_visibility(
         "would_drop": would_drop_count,
         "actual_dropped": would_drop_count if apply_mask else 0,
         "historical_kept_if_masked": historical_total - would_drop_count,
+        "unique_pages_before": unique_pages_before,
+        "unique_historical_pages_before": unique_historical_pages_before,
+        "unique_nonresident_historical_pages_before": (
+            unique_nonresident_historical_pages_before
+        ),
+        "unique_pages_with_current_writes_before": unique_with_writes_before,
+        "unique_pages_after": unique_pages_after,
+        "unique_pages_with_current_writes_after": unique_with_writes_after,
         "post_valid": int(post_valid.sum().item()),
         "post_sum": int(post_values.sum().item()),
         "post_square_sum": int((post_values * post_values).sum().item()),
@@ -128,6 +157,12 @@ FINGERPRINT_FIELDS = (
     "historical_total",
     "would_drop",
     "historical_kept_if_masked",
+    "unique_pages_before",
+    "unique_historical_pages_before",
+    "unique_nonresident_historical_pages_before",
+    "unique_pages_with_current_writes_before",
+    "unique_pages_after",
+    "unique_pages_with_current_writes_after",
     "post_valid",
     "post_sum",
     "post_square_sum",

@@ -15,8 +15,13 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
 MAXTOK="${K1Q2C_MAX_TOKENS:-512}"
 MAX_BATCHED="${K1Q2C_MAX_NUM_BATCHED_TOKENS:-1024}"
+A_ONLY="${K1Q2C_ATTRIB_A_ONLY:-0}"
 if [[ "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2C attribution requires max-num-batched-tokens=1024" >&2
+  exit 2
+fi
+if [[ "$A_ONLY" != "0" && "$A_ONLY" != "1" ]]; then
+  echo "REFUSE: K1Q2C_ATTRIB_A_ONLY must be 0 or 1" >&2
   exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -72,6 +77,7 @@ SCHED_STATS="$OUT/c_scheduler_stats.jsonl"
 WORKER_STATS="$OUT/c_worker_stats.jsonl"
 C_SUMMARY="$OUT/c_q2c_runtime_summary.json"
 SUMMARY="$OUT/q2c_attribution_summary.json"
+WORKING_SET_SUMMARY="$OUT/q2c_working_set_summary.json"
 LAUNCH_PID=""
 ACTIVE_LOG=""
 PATCHED=0
@@ -225,6 +231,7 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2c_attribution.sh"
   "$REPO/tools/kvmem_qsa_make_q2c_runtime_plan.py" \
   "$REPO/tools/kvmem_q2c_boot_sizing_contract.py" \
   "$REPO/tools/kvmem_q2c_attribution_summarize.py" \
+  "$REPO/tools/kvmem_q2c_working_set_summarize.py" \
   "$REPO/tools/kvmem_q2c_runtime_summarize.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_attribution.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_runtime.py"
@@ -240,6 +247,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" -m pytest -q \
   "$REPO/tests/test_kvmem_q2c_attribution.py" \
   "$REPO/tests/test_kvmem_q2c_attribution_summary.py" \
+  "$REPO/tests/test_kvmem_q2c_working_set_summary.py" \
   "$REPO/tests/test_qsa_q2c_attribution_patch.py" \
   "$REPO/tests/test_kvmem_q2c_scheduler_contract.py" \
   "$REPO/tests/test_kvmem_q2c_boot_sizing.py" \
@@ -281,6 +289,30 @@ echo "=== A: full KV, original QSA selection ==="
 launch_full_control baseline "$A_STATS" "$OUT/logs/serve_a_full_original.log"
 run_request "$A_RESPONSE" "$OUT/a_full_original_response.stdout.json"
 test -s "$A_STATS"
+
+if [[ "$A_ONLY" == "1" ]]; then
+  echo "=== summarize original-selection working set ==="
+  set +e
+  PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+    "$V/bin/python" "$REPO/tools/kvmem_q2c_working_set_summarize.py" \
+    --stats "$A_STATS" --plan "$PLAN" --out "$WORKING_SET_SUMMARY" \
+    | tee "$OUT/q2c_working_set_summary.stdout.json"
+  WORKING_SET_RC=$?
+  set -e
+  XID1=$(xid_now); XID1=${XID1:-0}
+  XID_DELTA=$((XID1-XID0))
+  echo "xid_after=$XID1 xid_delta=$XID_DELTA"
+  restore_qsa
+  QSA_SHA_AFTER=$(sha256sum "$QSA" | awk '{print $1}')
+  echo "qsa_sha256_after=$QSA_SHA_AFTER"
+  if [[ "$QSA_SHA_AFTER" != "$QSA_SHA_BEFORE" ]]; then exit 3; fi
+  nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu \
+    --format=csv,noheader || true
+  echo "gpu_processes=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+' || true)"
+  echo "vllm_processes=$(pgrep -af 'VLLM::EngineCore|vllm serve' | wc -l)"
+  if (( XID_DELTA != 0 )); then exit 3; fi
+  exit "$WORKING_SET_RC"
+fi
 
 : > "$B_STATS"
 echo "=== B: full KV, shared progressive mask ==="

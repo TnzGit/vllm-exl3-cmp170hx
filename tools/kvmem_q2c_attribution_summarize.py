@@ -145,8 +145,19 @@ def summarize(
         name: _prefill_map(rows, prompt_last_pos)
         for name, rows in attribution_rows.items()
     }
+    ab_selection = _compare(maps["a"], maps["b"], SELECTION_FIELDS)
+    ab_output = _compare(maps["a"], maps["b"], OUTPUT_FIELDS)
     bc_selection = _compare(maps["b"], maps["c"], SELECTION_FIELDS)
     bc_output = _compare(maps["b"], maps["c"], OUTPUT_FIELDS)
+    ab_no_drop_a = {
+        key: row for key, row in maps["a"].items()
+        if int(row.get("would_drop", 0)) == 0
+    }
+    ab_no_drop_b = {
+        key: row for key, row in maps["b"].items()
+        if int(row.get("would_drop", 0)) == 0
+    }
+    ab_no_drop_output = _compare(ab_no_drop_a, ab_no_drop_b, OUTPUT_FIELDS)
     lifecycle = validate_virtual_lifecycle(
         scheduler_rows, int(plan["physical_page_count"])
     )
@@ -171,7 +182,7 @@ def summarize(
     write_mapping_gate = bool(
         q2c_summary.get("worker", {}).get("write_mapping_exact_all")
     )
-    evidence_gate = bool(
+    c_mechanics_gate = bool(
         mode_gate
         and records_gate
         and lifecycle["exact"]
@@ -179,22 +190,28 @@ def summarize(
         and write_mapping_gate
     )
 
+    evidence_gate = bool(mode_gate and records_gate)
+
     if not semantic["a"]:
         classification = "Q2C_ATTRIBUTION_BASELINE_INVALID"
         conclusive = False
     elif not evidence_gate:
         classification = "Q2C_ATTRIBUTION_EVIDENCE_INCOMPLETE"
         conclusive = False
+    elif not semantic["b"]:
+        # B retains the complete stock GPU KV and changes only the shared
+        # progressive visibility rule. A-pass/B-fail therefore isolates that
+        # rule causally; C parity is not needed for this conclusion. Exact
+        # cross-process tensor parity is reported separately because A/B can
+        # diverge before either run has a page eligible for masking.
+        classification = "Q2C_ATTRIBUTION_PROGRESSIVE_POLICY_CAUSAL"
+        conclusive = True
+    elif not c_mechanics_gate:
+        classification = "Q2C_ATTRIBUTION_C_MECHANICS_INCOMPLETE"
+        conclusive = False
     elif semantic["b"] and not semantic["c"]:
         classification = "Q2C_ATTRIBUTION_BOUNDED_IMPLEMENTATION_NO_GO"
         conclusive = True
-    elif not semantic["b"] and not semantic["c"]:
-        if bc_selection["exact"] and bc_output["exact"]:
-            classification = "Q2C_ATTRIBUTION_PROGRESSIVE_POLICY_CAUSAL"
-            conclusive = True
-        else:
-            classification = "Q2C_ATTRIBUTION_BOUNDED_IMPLEMENTATION_UNRESOLVED"
-            conclusive = False
     elif semantic["b"] and semantic["c"]:
         classification = "Q2C_ATTRIBUTION_NO_SEMANTIC_FAILURE"
         conclusive = True
@@ -212,9 +229,14 @@ def summarize(
         "q2c_nonsemantic_gate": q2c_nonsemantic_gate,
         "write_mapping_gate": write_mapping_gate,
         "evidence_gate": evidence_gate,
+        "c_mechanics_gate": c_mechanics_gate,
         "modes": modes,
         "prompt_last_pos": prompt_last_pos,
         "prefill_records": {name: len(rows) for name, rows in maps.items()},
+        "a_b_selection": ab_selection,
+        "a_b_attention_output": ab_output,
+        "a_b_no_drop_attention_output": ab_no_drop_output,
+        "cross_run_bit_exact_usable": bool(ab_no_drop_output["exact"]),
         "b_c_selection": bc_selection,
         "b_c_attention_output": bc_output,
         "virtual_lifecycle": lifecycle,

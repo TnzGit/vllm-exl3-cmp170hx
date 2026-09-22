@@ -20,6 +20,8 @@ def test_attribution_runner_freezes_three_matched_modes():
     assert "launch_full_control baseline" in src
     assert "launch_full_control progressive_mask" in src
     assert "launch_bounded" in src
+    assert 'A_ONLY="${K1Q2C_ATTRIB_A_ONLY:-0}"' in src
+    assert "kvmem_q2c_working_set_summarize.py" in src
     assert "VLLM_QWEN_KVMEM_Q2C_ATTRIB_STATS_PATH" in src
     assert "VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH" in src
     assert "ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0" in src

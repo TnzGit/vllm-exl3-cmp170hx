@@ -91,10 +91,10 @@ def test_b_pass_c_fail_points_to_bounded_implementation():
     assert out["conclusive"] is True
 
 
-def test_output_divergence_keeps_policy_attribution_unresolved():
+def test_cross_run_output_divergence_does_not_override_a_b_causal_control():
     out = _summarize(mutate_c="output_bit_sum")
-    assert out["classification"] == "Q2C_ATTRIBUTION_BOUNDED_IMPLEMENTATION_UNRESOLVED"
-    assert out["conclusive"] is False
+    assert out["classification"] == "Q2C_ATTRIBUTION_PROGRESSIVE_POLICY_CAUSAL"
+    assert out["conclusive"] is True
     assert out["b_c_selection"]["exact"] is True
     assert out["b_c_attention_output"]["exact"] is False
 
