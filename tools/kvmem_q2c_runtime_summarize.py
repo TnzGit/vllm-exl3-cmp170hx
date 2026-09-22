@@ -19,6 +19,7 @@ def summarize(
     scheduler_rows: list[dict],
     worker_rows: list[dict],
     plan: dict,
+    boot: dict,
 ) -> dict:
     expected_layers = int(plan["expected_qsa_layers"])
     resident_count = int(plan["resident_page_count"])
@@ -28,6 +29,10 @@ def summarize(
     expected_transfer = resident_count * page_size
     expected_jobs = (resident_count + staging_pages - 1) // staging_pages
     expected_staging_bytes = staging_pages * page_size
+    dual_pool_gate = bool(
+        boot.get("dual_pool_boot_gate")
+        and boot.get("classification") == "Q2C_DUAL_POOL_BOOT_GO"
+    )
 
     reclaim_rows = [
         r for r in scheduler_rows if r.get("event") == "q2c_scheduler_reclaim"
@@ -104,13 +109,16 @@ def summarize(
     )
 
     hard_go = bool(
-        scheduler_gate
+        dual_pool_gate
+        and scheduler_gate
         and worker_geometry_gate
         and cpu_gate
         and visibility_gate
         and semantic_gate
     )
-    if not scheduler_gate:
+    if not dual_pool_gate:
+        classification = "Q2C_DUAL_POOL_BOOT_EVIDENCE_NO_GO"
+    elif not scheduler_gate:
         classification = "Q2C_SCHEDULER_SHRINK_NO_GO"
     elif not worker_geometry_gate:
         classification = "Q2C_WORKER_BLOCK_TABLE_NO_GO"
@@ -128,6 +136,7 @@ def summarize(
         "schema": 1,
         "classification": classification,
         "q2c_runtime_go": hard_go,
+        "dual_pool_boot_gate": dual_pool_gate,
         "scheduler_shrink_gate": scheduler_gate,
         "worker_block_table_gate": worker_geometry_gate,
         "cpu_authority_gate": cpu_gate,
@@ -137,6 +146,7 @@ def summarize(
         "finish_reason": response.get("finish_reason"),
         "completion_tokens": int((response.get("usage") or {}).get("completion_tokens", 0)),
         "text": response.get("text"),
+        "dual_pool_boot": boot,
         "plan": {
             "resident_page_tokens": int(plan["page_tokens"]),
             "resident_history_pages": resident_count,
@@ -228,6 +238,7 @@ def main() -> int:
     ap.add_argument("--scheduler-stats", type=Path, required=True)
     ap.add_argument("--worker-stats", type=Path, required=True)
     ap.add_argument("--plan", type=Path, required=True)
+    ap.add_argument("--boot", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     result = summarize(
@@ -235,6 +246,7 @@ def main() -> int:
         load_jsonl(args.scheduler_stats),
         load_jsonl(args.worker_stats),
         json.loads(args.plan.read_text()),
+        json.loads(args.boot.read_text()),
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))
