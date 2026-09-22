@@ -921,6 +921,7 @@ _LOAD_TIMING_STATS: dict[str, Any] = {
     "DIRECT_TRELLIS_PINNED_CPU_STAGE_WALL_S": 0.0,
     "DIRECT_TRELLIS_PINNED_H2D_WALL_S": 0.0,
     "DIRECT_TRELLIS_PINNED_TOTAL_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PINNED_BUFFER_MAX_BYTES": 0,
 }
 _LOAD_TRACE_STARTED = False
 _LOAD_TRACE_FINAL_WRITTEN = False
@@ -971,6 +972,7 @@ def _load_trace_record(tag: str, layer: Any | None = None) -> None:
         "proc_io": _proc_io_snapshot(),
         "direct_fill": direct_fill_stats(),
         "loader_timing": loader_timing_stats(),
+        "pinned_stage_ab": _PINNED_STAGE_AB,
     }
     if layer is not None:
         rec["layer"] = str(
@@ -1123,6 +1125,11 @@ def _pinned_trellis_stage_view(src: "torch.Tensor") -> tuple["torch.Tensor", flo
             numel, dtype=torch.int16, device="cpu", pin_memory=True
         )
         alloc_wall = time.perf_counter() - t0
+        if _LOAD_TRACE_PATH:
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_BUFFER_MAX_BYTES"] = max(
+                int(_LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_BUFFER_MAX_BYTES"]),
+                numel * int(torch.empty((), dtype=torch.int16).element_size()),
+            )
     return _PINNED_TRELLIS_STAGE[:numel].view(src.shape), alloc_wall
 
 def _direct_fill_trellis_slot(
