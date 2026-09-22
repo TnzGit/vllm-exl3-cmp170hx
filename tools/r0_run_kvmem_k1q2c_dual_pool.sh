@@ -222,9 +222,9 @@ cmp -s "$WORKER_BACKUP" "$WORKER"
 cmp -s "$QSA_BACKUP" "$QSA"
 
 echo "=== apply dual-pool installed patch for CPU integration gates ==="
+DUAL_PATCHED=1
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/patch_vllm_q2c_dual_pool.py" "$VLLM_ROOT"
-DUAL_PATCHED=1
 grep -Fq "# KVMEM_Q2C_DUAL_POOL_PLATFORM_V1" "$PLATFORM"
 grep -Fq "# KVMEM_Q2C_DUAL_POOL_CORE_V1" "$CORE"
 grep -Fq "# KVMEM_Q2C_DUAL_POOL_WORKER_V1" "$WORKER"
@@ -256,10 +256,10 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   | tee "$OUT/q2c_runtime_plan.stdout.json"
 
 echo "=== apply QSA runtime patch ==="
+QSA_PATCHED=1
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_runtime.py" \
   "$VLLM_ROOT"
-QSA_PATCHED=1
 grep -Fq "# KVMEM_QSA_Q2C_RUNTIME_V1" "$QSA"
 QSA_SHA_PATCHED=$(sha256sum "$QSA" | awk '{print $1}')
 PLATFORM_SHA_PATCHED=$(sha256sum "$PLATFORM" | awk '{print $1}')
