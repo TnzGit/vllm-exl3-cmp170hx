@@ -105,6 +105,14 @@ def build_result(observed_full_block_tokens: int) -> dict:
     contract_spec = make_qsa_resident_contract_spec()
     manager_cls = KVCacheSpecRegistry.get_manager_class(contract_spec)
     base_spec_cls = KVCacheSpecRegistry.get_uniform_type_base_spec(contract_spec)
+    stock_probe = FullAttentionSpec(
+        block_size=16,
+        num_kv_heads=2,
+        head_size=256,
+        head_size_v=256,
+        dtype=torch.bfloat16,
+    )
+    stock_manager_cls = KVCacheSpecRegistry.get_manager_class(stock_probe)
 
     packed_pos = utils_src.find("if packed_groups := _get_packed_kv_cache_groups")
     unify_pos = utils_src.find("filtered_spec = unify_kv_cache_spec_page_size")
@@ -124,6 +132,9 @@ def build_result(observed_full_block_tokens: int) -> dict:
         ),
         "registry_custom_spec_registered": manager_cls is QSAResidentRegistryProbeManager,
         "registry_uniform_base_is_custom": base_spec_cls is QSAResidentContractSpec,
+        "builtin_full_attention_registry_preserved": (
+            stock_manager_cls is single_mgr.FullAttentionManager
+        ),
         "logical_table_exceeds_physical_cap": (
             int(geometry["logical_table_pages"]) > int(geometry["physical_page_cap"])
         ),
