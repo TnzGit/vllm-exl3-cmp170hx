@@ -50,6 +50,8 @@ def _plan():
         "active_from_pos": 160000,
         "active_page0": 10000,
         "active_reserve_pages": 64,
+        "active_reserve_tokens": 1024,
+        "scheduler_chunk_tokens": 1024,
         "physical_page_count": 4160,
     }
 
@@ -158,3 +160,6 @@ def test_runtime_plan_is_strict():
     bad = dict(_plan(), mode="qsa_cpu_backed_shadow")
     with pytest.raises(ValueError, match="mode mismatch"):
         validate_runtime_plan(bad)
+    bad_chunk = dict(_plan(), scheduler_chunk_tokens=2048)
+    with pytest.raises(ValueError, match="chunk must equal"):
+        validate_runtime_plan(bad_chunk)
