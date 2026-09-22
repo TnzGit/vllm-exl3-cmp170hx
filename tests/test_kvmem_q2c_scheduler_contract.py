@@ -1,3 +1,5 @@
+from vllm.v1.core.single_type_kv_cache_manager import FullAttentionManager
+from vllm.v1.kv_cache_interface import FullAttentionSpec
 from vllm.v1.kv_cache_spec_registry import KVCacheSpecRegistry
 
 from vllm_exl3.kvmem_qsa_scheduler_contract import (
@@ -44,3 +46,12 @@ def test_q2c_custom_spec_registry_contract():
     assert spec.prefix_cacheable is False
     assert KVCacheSpecRegistry.get_manager_class(spec) is QSAResidentRegistryProbeManager
     assert KVCacheSpecRegistry.get_uniform_type_base_spec(spec) is QSAResidentContractSpec
+
+    stock = FullAttentionSpec(
+        block_size=16,
+        num_kv_heads=2,
+        head_size=256,
+        head_size_v=256,
+        dtype=spec.dtype,
+    )
+    assert KVCacheSpecRegistry.get_manager_class(stock) is FullAttentionManager
