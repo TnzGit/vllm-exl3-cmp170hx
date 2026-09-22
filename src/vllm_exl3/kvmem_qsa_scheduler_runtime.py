@@ -148,7 +148,17 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         if self._record_new_block_ids:
             self.new_block_ids.extend(b.block_id for b in fresh)
 
+        previous_peak = self._peak_real_pages.get(request_id, 0)
         real = self._record_peak(request_id)
+        if real > previous_peak:
+            _write_scheduler_event({
+                "event": "q2c_scheduler_peak",
+                "request_id": request_id,
+                "logical_row_pages": len(blocks),
+                "real_pages": real,
+                "peak_real_pages": real,
+                "physical_page_cap": self.spec.physical_page_cap,
+            })
         # The runner constrains each scheduler chunk to the 64-page active
         # reserve. Sticky resident pages plus the current work range must
         # therefore never exceed the same 4,160-page product cap.
