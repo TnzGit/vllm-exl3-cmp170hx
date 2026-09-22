@@ -248,15 +248,19 @@ def _q2c_restore_history_from_cpu(layer, plan, kv_cache, block_table):
         idx = torch.tensor(pages, dtype=torch.int64, device=block_table.device)
         phys = block_table[0].index_select(0, idx).to(torch.int64)
         n = len(pages)
+        # Keep only one staging-window-sized reference at a time. This proves
+        # the CPU round trip restored the bytes that were resident immediately
+        # before we deliberately destroy the GPU copy, without recreating a
+        # persistent 130 MiB/layer shadow.
+        expected = kv_cache.index_select(0, phys).clone()
         zeros = torch.zeros_like(staging[:n])
         kv_cache.index_copy_(0, phys, zeros)
         torch.cuda.synchronize()
         obs = backing.stage_in(pages, list(range(n)))
         h2d_bytes += int(obs.transfer_bytes)
         jobs += int(obs.job_id != 0)
+        same = torch.eq(staging[:n], expected).reshape(n, -1).all(dim=1)
         kv_cache.index_copy_(0, phys, staging[:n])
-        actual = kv_cache.index_select(0, phys)
-        same = torch.eq(actual, staging[:n]).reshape(n, -1).all(dim=1)
         if not bool(same.all().item()):
             exact = False
             bad = int(torch.nonzero(~same, as_tuple=False)[0, 0].item())
