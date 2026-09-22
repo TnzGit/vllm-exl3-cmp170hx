@@ -81,9 +81,12 @@ assert any(r["arm"]=="prefetch" for r in rows)
 print(f"ideal_model_load_window=true shard_records={len(rows)}")
 PY
 
+set +e
 "$V/bin/python" "$REPO/tools/r0_shard_prefetch_ab_summary.py" \
   --stats "$STATS" --startup "$STARTUP" --out "$SUMMARY" \
   | tee "$OUT/shard_prefetch_ab_summary.stdout.json"
+SUMMARY_RC=${PIPESTATUS[0]}
+set -e
 
 echo "=== restore installed vLLM ==="
 restore_weight_utils
@@ -93,6 +96,12 @@ if [[ "$SHA_AFTER" != "$SHA_BEFORE" ]]; then echo "ERROR: installed weight_utils
 if grep -qF "$MARKER" "$WEIGHT_UTILS"; then echo "ERROR: marker remains after restore" >&2; exit 4; fi
 if [[ -e "$BACKUP" ]]; then echo "ERROR: backup remains after restore" >&2; exit 4; fi
 echo "installed_weight_utils_restored=true"
+echo "summary_exit_code=$SUMMARY_RC"
+
+if (( SUMMARY_RC != 0 )); then
+  echo "A/B summary invalid; restore proof completed before exit" >&2
+  exit "$SUMMARY_RC"
+fi
 
 echo "=== compact result ==="
 "$V/bin/python" - "$SUMMARY" "$BASE" <<'PY'
@@ -100,7 +109,7 @@ import json, sys
 d=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
 print(f'shard_prefetch_ab_valid={d["shard_prefetch_ab_valid"]}')
 print(f'main_weights_s={d["main_weights_s"]}')
-for section in ("control","prefetch","balance","comparison"):
+for section in ("control","prefetch","excluded","balance","comparison"):
     for k,v in d[section].items(): print(f"{section}.{k}={v}")
 km=b["kernel_model_load_window"]
 for k in ("elapsed_s","read_gib","major_faults","minor_faults","user_cpu_s","system_cpu_s","kernel_read_vs_checkpoint_ratio"):
