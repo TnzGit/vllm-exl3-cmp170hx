@@ -16,6 +16,9 @@ def test_q2c_runtime_runner_contract():
     src = RUNNER.read_text()
     assert 'EXPECTED_SHA="${EXPECTED_SHA:?set EXPECTED_SHA to the exact Q2C runtime head}"' in src
     assert "patch_vllm_qsa_q2c_runtime.py" in src
+    assert "test_kvmem_q2c_boot_sizing.py" in src
+    assert "kvmem_q2c_boot_sizing_contract.py" in src
+    assert "q2c_boot_sizing_contract.json" in src
     assert "VLLM_QWEN_KVMEM_Q2C_PLAN" in src
     assert "VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH" in src
     assert "VLLM_QWEN_KVMEM_Q2C_WORKER_STATS_PATH" in src
