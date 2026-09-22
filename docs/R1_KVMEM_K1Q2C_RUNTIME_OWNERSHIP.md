@@ -396,3 +396,102 @@ preserving LRU data-structure change should be trace-replayed against the old
 victim sequence before another live run. Fine-grained producer/consumer event
 ordering remains later work; the proven synchronous barrier stays frozen until
 that separate candidate passes its own qualification.
+
+## Q2E-3 evidence tightening and CPU bookkeeping optimization
+
+Q2E-3 preserved the Q2E-2 semantics and capacity contract while tightening
+the evidence gates and reducing CPU-side page-planning cost. The final
+evidence head is:
+
+```text
+53d6fd0bad5f2bbc88fa3491b080a23e5431fcd0
+```
+
+The performance implementation itself is exact SHA
+`883b207c5e1c6bbe56cbfff2b0667f6bf4019885`; the commits after it add only
+stronger direct-load verification and its runner gate.
+
+The accepted changes are:
+
+- the dynamic table oracle now requires its per-layer check count to equal
+  the cumulative split-call count, rather than accepting any nonzero sample;
+- a standalone exact LRU replay reconstructs every assignment from the
+  CRC-protected access trace and checks miss decisions, victims, slots,
+  generations, resident counts, and capacity;
+- trace records are encoded once instead of once for sizing and again for
+  append, without changing bytes, CRCs, flush behavior, or truncation
+  detection;
+- history staging reports residency lookup, assignment, transfer submission,
+  table delta, and LRU touch separately;
+- zero-miss and free-slot paths avoid unnecessary victim candidate work;
+- streaming LRU timestamps use a bounded NumPy `int64` array and stable
+  `(timestamp, slot)` ordering, with tests covering duplicate touches, range
+  errors, overflow, and tie-breaking;
+- selected-history planning uses a reusable logical-page bitmap instead of a
+  device `unique` plus Python current-page filtering. Across all 12 layers the
+  bitmap occupies 120,756 bytes and does not alter selected-page order or the
+  dynamic row splits.
+
+The runner's final CPU/static suite contains 57 tests. Both the prior 33,588-
+record trace and the new 33,120-record trace replayed exactly across all 12
+layers; the latter covered 2,090,465 page assignments with a maximum of 4,032
+READ-resident pages.
+
+Three fresh oracle-off 160K runs at `883b207c` all returned the target answer
+and passed the semantic, frozen-prefill scheduler, trace, capacity,
+CPU-authority, restore, Xid, process, and port gates. Their prefill exposed
+times were 88.8622, 89.8168, and 90.5738 seconds: median 89.8168 seconds and
+range 1.7117 seconds. The two available `ddcf37f` prefill measurements were
+106.8568 and 106.6855 seconds, median 106.7711 seconds. On this fixed case the
+accepted candidate therefore reduced the primary prefill metric by 16.9543
+seconds, or about 15.9%.
+
+The matched 141-completion-token comparison reduced request wall time from
+235.1903 to 215.7971 seconds, a decrease of 19.3932 seconds or about 8.25%.
+The other two candidate runs generated 104 completion tokens and recorded
+212.9968 and 213.5131 seconds, so they are stability evidence rather than
+matched end-to-end comparisons.
+
+Final oracle-off timings put selection planning at 12.7490--12.9928 seconds,
+history assignment at 12.0228--12.1745 seconds, LRU touch at
+4.4904--4.6641 seconds, qualification trace emission at
+18.0307--18.2142 seconds, and H2D worker wall time at
+21.0836--22.2363 seconds. Dynamic table management remains about 0.24
+seconds and is no longer a useful optimization target.
+
+Two separate diagnostic runs strengthen correctness without being included in
+the performance comparison. The full dynamic table oracle checked exactly
+2,635 sub-batches and at least 3,969,635 device-table entries per layer with
+zero mismatches. The final direct-load byte oracle required at least 66
+verified pages per layer and observed at least 165. Since the initial
+publication range contains only pages 0 through 64, this proves at least 100
+subsequent demand-reload verifications per layer. Each verification reads the
+actual destination GPU slot and uses `torch.equal` against CPU backing.
+
+Every accepted run retained 16-token pages, WRITE peak 128, READ peak 4,032,
+combined peak 4,160, and frozen-prefill scheduler digest
+`6cfb508dbd49e52b3f8fa4a55f9a8a92dd44cf881acce7dbfcc106fa0c4c2c76`.
+Post-run state was Xid delta zero, exact installed-QSA restore, 14 MiB GPU
+use, no residual GPU/vLLM process, and a closed service port.
+
+An interleaved rerun of the old `ddcf37f` baseline emitted only
+`<|im_end|>`. Its 1,872 prefill worker records and timing coverage were
+complete, but the immediate semantic stop omitted final scheduler-reclaim
+events and therefore did not qualify as a baseline GO. This confirms that
+semantic output has cross-run instability and is why prefill exposed time,
+frozen scheduler identity, and multiple candidate repetitions are the primary
+performance evidence. It does not weaken the candidate's three consecutive
+oracle-off semantic passes or either diagnostic semantic pass.
+
+Further trace reduction is possible, but full evidence remains mandatory for
+formal qualification. Fine-grained asynchronous transfer remains deferred:
+the proven consumer barrier costs only about 0.25 seconds, while relaxing it
+previously caused a semantic failure. The next optimization decision should
+first target the remaining measured CPU assignment/touch cost or H2D traffic,
+and must retain exact replay, repeated direct-load verification, the 4,160-page
+cap, and all semantic gates.
+
+Q2E-3 remains a single frozen 160K, single-request, eager, MTP-off result. It
+does not qualify 240K, multiple concurrent requests, persistent multi-turn
+state, recurrent-state restoration, MTP, NVMe backing, or a production-grade
+asynchronous path.
