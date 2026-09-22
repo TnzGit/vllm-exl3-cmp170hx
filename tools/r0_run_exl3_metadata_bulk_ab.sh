@@ -12,8 +12,10 @@ SUMMARY="$OUT/metadata_bulk_ab_summary.json"
 
 echo "=== CPU gates ==="
 bash -n "$REPO/tools/r0_run_exl3_metadata_bulk_ab.sh"
-"$V/bin/python" -m py_compile   "$REPO/src/vllm_exl3/exl3.py"   "$REPO/tools/r0_metadata_bulk_ab_summary.py"   "$REPO/tools/r0_run_tensor_consumer_attribution.sh"   "$REPO/tools/r0_tensor_consumer_attribution.py"
-PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"   "$V/bin/python" -m pytest -q   "$REPO/tests/test_metadata_bulk_ab.py"   "$REPO/tests/test_metadata_bulk_ab_summary.py"   "$REPO/tests/test_tensor_consumer_attr_patch.py"   "$REPO/tests/test_tensor_consumer_attribution.py"   "$REPO/tests/test_tensor_consumer_attr_runner.py"
+
+"$V/bin/python" -m py_compile   "$REPO/src/vllm_exl3/exl3.py"   "$REPO/tools/r0_metadata_bulk_ab_summary.py"   "$REPO/tools/r0_tensor_consumer_attribution.py"
+
+PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"   "$V/bin/python" -m pytest -q   "$REPO/tests/test_metadata_bulk_ab.py"   "$REPO/tests/test_metadata_bulk_ab_summary.py"   "$REPO/tests/test_metadata_bulk_ab_runner.py"   "$REPO/tests/test_tensor_consumer_attr_patch.py"   "$REPO/tests/test_tensor_consumer_attribution.py"   "$REPO/tests/test_tensor_consumer_attr_runner.py"
 
 echo "=== one target-loader boot; even=control odd=deferred/bulk ==="
 VLLM_EXL3_METADATA_BULK_AB=1 R0_REPO="$REPO"   bash "$REPO/tools/r0_run_tensor_consumer_attribution.sh" "$OUT"
