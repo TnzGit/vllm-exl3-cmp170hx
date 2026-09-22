@@ -4,6 +4,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "r0_run_exl3_pinned_stage_ab.sh"
+WATCHER = ROOT / "tools" / "r0_proc_io_watch.py"
 
 
 def test_pinned_ab_runner_shell_syntax():
@@ -38,3 +39,9 @@ def test_pinned_ab_runner_keeps_raw_h2d_reference():
     src = RUNNER.read_text()
     assert "LOADER_REFERENCE_H2D_GIB_S:-6.3494" in src
     assert "r0_exl3_pinned_stage_ab.py" in src
+
+
+def test_pinned_ab_uses_local_vllm_model_start_marker():
+    src = WATCHER.read_text()
+    assert "Loading model from scratch" in src
+    assert "Starting to load model" in src
