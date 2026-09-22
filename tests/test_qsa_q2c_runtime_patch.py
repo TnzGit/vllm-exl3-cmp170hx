@@ -54,6 +54,7 @@ def test_q2c_patch_contains_scheduler_owned_contract():
     assert '"mode": "c_bounded"' in out
     assert "worker_unique_virtual_ids" in out
     assert "append_only_virtual_ids" in out
-    assert "torch.isin" in out
+    shared = (ROOT / "src" / "vllm_exl3" / "kvmem_q2c_attribution.py").read_text()
+    assert "torch.isin" in shared
     assert "single_tensor_cpu_backing" in out
     assert "independent resident" not in mod.__doc__.lower()
