@@ -52,6 +52,12 @@ def summarize(
         and int(boundary_rows[0]["physical_page_cap"]) == physical_cap
         and int(boundary_rows[0]["resident_history_pages"]) == resident_count
         and int(boundary_rows[0]["active_reserve_pages"]) == int(plan["active_reserve_pages"])
+        and int(boundary_rows[0].get("private_pool_num_blocks", 0)) == physical_cap + 1
+        and (
+            int(boundary_rows[0]["real_pages_at_boundary"])
+            + int(boundary_rows[0].get("private_pool_free_blocks", -1))
+            == physical_cap
+        )
         and reclaimed_pages > 0
         and peak_real_pages <= physical_cap
     )
@@ -168,6 +174,17 @@ def summarize(
             "reclaimed_pages_total": reclaimed_pages,
             "peak_real_pages": peak_real_pages,
             "physical_page_cap": int(transition.get("physical_page_cap", 0)),
+            "private_pool_num_blocks": int(
+                transition.get("private_pool_num_blocks", 0)
+            ),
+            "private_pool_free_blocks_at_boundary": int(
+                transition.get("private_pool_free_blocks", -1)
+            ),
+            "private_pool_usable_conservation_ok": (
+                int(transition.get("real_pages_at_boundary", 0))
+                + int(transition.get("private_pool_free_blocks", -1))
+                == physical_cap
+            ),
             "peak_within_cap": peak_real_pages <= physical_cap,
         },
         "worker": {
