@@ -169,6 +169,27 @@ def summarize(trace_rows: list[dict], tensor_summary: dict, loader: dict) -> dic
                 if int(stats.get("commit_calls", 0)) > 0
                 else None
             ),
+            "projected_all_control_metadata_wall_s": (
+                2.0 * control_wall if valid else None
+            ),
+            "projected_all_deferred_metadata_wall_s": (
+                2.0 * deferred_total if valid else None
+            ),
+            "projected_metadata_saved_s": (
+                2.0 * (control_wall - deferred_total) if valid else None
+            ),
+            "projected_all_control_main_weights_s": (
+                loader["startup"]["main_weights_s"]
+                + (control_wall - deferred_total)
+                if valid
+                else None
+            ),
+            "projected_all_deferred_main_weights_s": (
+                loader["startup"]["main_weights_s"]
+                - (control_wall - deferred_total)
+                if valid
+                else None
+            ),
         },
         "by_suffix": suffix,
         "tensor_consumer_mixed_arm": {
