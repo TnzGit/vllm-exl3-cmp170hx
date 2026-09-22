@@ -939,8 +939,32 @@ _METADATA_BULK_AB_STATS: dict[str, Any] = {
 }
 
 
+def _metadata_bulk_mode() -> str:
+    ab = os.environ.get("VLLM_EXL3_METADATA_BULK_AB", "0") == "1"
+    full = os.environ.get("VLLM_EXL3_METADATA_FULL_BULK", "0") == "1"
+    if ab and full:
+        raise RuntimeError(
+            "VLLM_EXL3_METADATA_BULK_AB and VLLM_EXL3_METADATA_FULL_BULK "
+            "are mutually exclusive"
+        )
+    return "full" if full else "ab" if ab else "off"
+
+
 def _metadata_bulk_ab_enabled() -> bool:
-    return os.environ.get("VLLM_EXL3_METADATA_BULK_AB", "0") == "1"
+    return _metadata_bulk_mode() == "ab"
+
+
+def _metadata_bulk_full_enabled() -> bool:
+    return _metadata_bulk_mode() == "full"
+
+
+def _metadata_bulk_enabled() -> bool:
+    return _metadata_bulk_mode() != "off"
+
+
+def _metadata_bulk_defer_expert(expert_id: int) -> bool:
+    mode = _metadata_bulk_mode()
+    return mode == "full" or (mode == "ab" and (int(expert_id) & 1) == 1)
 
 
 def _metadata_bulk_ab_bucket(section: str, suffix: str) -> dict[str, Any]:
@@ -979,6 +1003,8 @@ def _metadata_bulk_ab_record(
 def metadata_bulk_ab_stats() -> dict[str, Any]:
     out = dict(_METADATA_BULK_AB_STATS)
     out["enabled"] = _metadata_bulk_ab_enabled()
+    out["full_enabled"] = _metadata_bulk_full_enabled()
+    out["mode"] = _metadata_bulk_mode()
     out["control_by_suffix"] = {
         k: dict(v)
         for k, v in _METADATA_BULK_AB_STATS["control_by_suffix"].items()
@@ -1026,7 +1052,8 @@ def _metadata_bulk_ab_full_dest(layer: Any, suffix: str, shard_id: str):
 
 
 def _metadata_bulk_ab_commit(layer: Any) -> None:
-    if not _metadata_bulk_ab_enabled():
+    mode = _metadata_bulk_mode()
+    if mode == "off":
         return
     stage = getattr(layer, "_exl3_metadata_bulk_ab_stage", None) or {}
     if not stage:
@@ -1038,7 +1065,12 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
 
     for (suffix, shard_id), by_eid in sorted(stage.items()):
         ids = sorted(int(eid) for eid in by_eid)
-        if not ids or any((eid & 1) == 0 for eid in ids):
+        if not ids:
+            raise RuntimeError(
+                f"EXL3 metadata bulk commit has no expert ids for "
+                f"{suffix}/{shard_id}"
+            )
+        if mode == "ab" and any((eid & 1) == 0 for eid in ids):
             raise RuntimeError(
                 f"EXL3 metadata bulk A/B expected odd expert ids for "
                 f"{suffix}/{shard_id}, got {ids[:8]}"
@@ -1066,9 +1098,17 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
             if batch.dtype != full_dest.dtype:
                 batch = batch.to(dtype=full_dest.dtype)
 
-        contiguous_odd = ids == list(range(ids[0], ids[-1] + 1, 2))
-        if contiguous_odd:
-            dest = full_dest[ids[0] : ids[-1] + 1 : 2]
+        contiguous = (
+            ids == list(range(ids[0], ids[-1] + 1))
+            if mode == "full"
+            else ids == list(range(ids[0], ids[-1] + 1, 2))
+        )
+        if contiguous:
+            dest = (
+                full_dest[ids[0] : ids[-1] + 1]
+                if mode == "full"
+                else full_dest[ids[0] : ids[-1] + 1 : 2]
+            )
             if tuple(batch.shape) != tuple(dest.shape):
                 raise RuntimeError(
                     f"EXL3 metadata bulk commit shape mismatch "
@@ -2961,7 +3001,7 @@ def _exl3_routed_experts_loader(layer: torch.nn.Module):
             if ok:
                 yield local_name
 
-        if _metadata_bulk_ab_enabled():
+        if _metadata_bulk_enabled():
             _metadata_bulk_ab_commit(layer)
 
     return load_weights
@@ -3247,7 +3287,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 raise RuntimeError("EXL3 marker load missing owner module")
             marker_t0 = time.perf_counter()
             marker_value = int(loaded.reshape(-1)[0].item()) if loaded.numel() else 0
-            if _metadata_bulk_ab_enabled() and (int(expert_id) & 1):
+            if _metadata_bulk_defer_expert(expert_id):
                 _metadata_bulk_ab_stage(
                     owner_mod,
                     suffix=suffix,
@@ -3460,7 +3500,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
             )
 
         nbytes = int(sharded.numel()) * int(sharded.element_size())
-        if _metadata_bulk_ab_enabled() and (int(expert_id) & 1):
+        if _metadata_bulk_defer_expert(expert_id):
             _metadata_bulk_ab_stage(
                 owner_mod,
                 suffix=suffix,
