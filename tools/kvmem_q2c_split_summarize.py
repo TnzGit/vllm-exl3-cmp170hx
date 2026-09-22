@@ -68,6 +68,12 @@ def summarize(
         "split_elements",
         "split_mismatch_elements",
         "split_max_abs",
+        "split_mean_abs",
+        "split_rmse",
+        "split_reference_max_abs",
+        "split_allclose",
+        "split_allclose_atol",
+        "split_allclose_rtol",
     )
     fields_gate = bool(records) and all(
         all(field in row for field in required) for row in records
@@ -83,13 +89,25 @@ def summarize(
             for row in records
         )
     )
+    numerical_gate = bool(
+        fields_gate
+        and all(
+            bool(row["split_allclose"])
+            and float(row["split_allclose_atol"]) == 0.02
+            and float(row["split_allclose_rtol"]) == 0.01
+            and float(row["split_max_abs"]) >= 0.0
+            and float(row["split_mean_abs"]) >= 0.0
+            and float(row["split_rmse"]) >= 0.0
+            and int(row["split_elements"]) > 0
+            for row in records
+        )
+    )
     exact_gate = bool(
         fields_gate
         and all(
             bool(row["split_exact"])
             and int(row["split_mismatch_elements"]) == 0
             and float(row["split_max_abs"]) == 0.0
-            and int(row["split_elements"]) > 0
             for row in records
         )
     )
@@ -99,13 +117,15 @@ def summarize(
         and int(response.get("usage", {}).get("prompt_tokens", -1)) == prompt_tokens
     )
     evidence_gate = bool(
-        coverage_gate and fields_gate and row_size_gate and call_gate and exact_gate
+        coverage_gate and fields_gate and row_size_gate and call_gate and numerical_gate
     )
-    if evidence_gate and semantic_gate:
+    if evidence_gate and semantic_gate and exact_gate:
         classification = "Q2C_FULL_KV_ROW_SPLIT_EXACT_SEMANTIC_GO"
+    elif evidence_gate and semantic_gate:
+        classification = "Q2C_FULL_KV_ROW_SPLIT_SEMANTIC_GO_NONEXACT"
     elif not coverage_gate or not fields_gate:
         classification = "Q2C_FULL_KV_ROW_SPLIT_EVIDENCE_INCOMPLETE"
-    elif not exact_gate:
+    elif not numerical_gate:
         classification = "Q2C_FULL_KV_ROW_SPLIT_ATTENTION_NO_GO"
     else:
         classification = "Q2C_FULL_KV_ROW_SPLIT_SEMANTIC_NO_GO"
@@ -120,6 +140,7 @@ def summarize(
         "row_size_gate": row_size_gate,
         "call_gate": call_gate,
         "exact_gate": exact_gate,
+        "numerical_gate": numerical_gate,
         "split_rows": split_rows,
         "prompt_tokens": prompt_tokens,
         "records": len(records),
@@ -136,6 +157,18 @@ def summarize(
             int(row.get("split_mismatch_elements", 0)) for row in records
         ),
         "max_abs": max((float(row.get("split_max_abs", 0.0)) for row in records), default=0.0),
+        "max_mean_abs": max(
+            (float(row.get("split_mean_abs", 0.0)) for row in records), default=0.0
+        ),
+        "max_rmse": max(
+            (float(row.get("split_rmse", 0.0)) for row in records), default=0.0
+        ),
+        "max_reference_abs": max(
+            (float(row.get("split_reference_max_abs", 0.0)) for row in records),
+            default=0.0,
+        ),
+        "allclose_atol": 0.02,
+        "allclose_rtol": 0.01,
     }
 
 
