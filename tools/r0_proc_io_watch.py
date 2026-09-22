@@ -135,7 +135,10 @@ def main() -> int:
             log_text = args.log.read_text(errors="replace")
         except OSError:
             log_text = ""
-        if model_start is None and "Starting to load model" in log_text:
+        if model_start is None and (
+            "Starting to load model" in log_text
+            or "Loading model from scratch" in log_text
+        ):
             model_start = dict(current, tag="MODEL_LOAD_START")
         if main_weights_done is None and "Loading weights took" in log_text:
             main_weights_done = dict(current, tag="MAIN_WEIGHTS_DONE")
