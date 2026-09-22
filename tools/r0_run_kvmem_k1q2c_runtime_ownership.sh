@@ -180,6 +180,7 @@ cmp -s "$QSA_BACKUP" "$QSA"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" -m pytest -q \
   "$REPO/tests/test_kvmem_q2c_scheduler_contract.py" \
+  "$REPO/tests/test_kvmem_q2c_boot_sizing.py" \
   "$REPO/tests/test_kvmem_q2c_runtime_manager.py" \
   "$REPO/tests/test_kvmem_q2c_runtime_plan.py" \
   "$REPO/tests/test_qsa_q2c_runtime_patch.py" \
