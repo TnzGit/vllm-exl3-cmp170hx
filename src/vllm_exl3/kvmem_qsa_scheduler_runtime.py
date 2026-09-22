@@ -40,9 +40,28 @@ class QSAResidentRuntimeSpec(AttentionSpec):
     def physical_page_cap(self) -> int:
         return len(self.resident_pages) + self.active_reserve_pages
 
+    @property
+    def virtual_null_block_id(self) -> int:
+        return self.physical_page_cap
+
+    @property
+    def dedicated_page_count(self) -> int:
+        # One extra zero page backs all logical null holes on the worker.
+        return self.physical_page_cap + 1
+
+    @property
+    def dedicated_memory_bytes_per_layer(self) -> int:
+        return self.dedicated_page_count * self.page_size_bytes
+
     def max_memory_usage_bytes(self, vllm_config: Any) -> int:
+        # Generic vLLM 0.29 uses one shared BlockPool and charges every block
+        # in units of the widest hybrid/Mamba group. Q2C's 4,160 physical pages
+        # live in a dedicated per-layer tensor instead, allocated during model
+        # construction and therefore already included in the worker memory
+        # profile. Keep exactly one normal-geometry placeholder page in the
+        # generic KV config so metadata/binding machinery still sees this group.
         del vllm_config
-        return self.physical_page_cap * self.page_size_bytes
+        return self.page_size_bytes
 
     def max_num_blocks_per_req(self, vllm_config: Any, max_len: int) -> int:
         del vllm_config
@@ -66,6 +85,24 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         self._processed_tokens: dict[str, int] = {}
         self._boundary_emitted: set[str] = set()
         self._peak_real_pages: dict[str, int] = {}
+
+        # QSA virtual page IDs index the dedicated QSA tensor directly. They
+        # must never enter vLLM's shared hybrid/Mamba BlockPool accounting,
+        # zeroing, copying, or free queue.
+        self._virtual_blocks = [
+            KVCacheBlock(block_id=i) for i in range(kv_cache_spec.physical_page_cap)
+        ]
+        self._virtual_null_block = KVCacheBlock(
+            block_id=kv_cache_spec.virtual_null_block_id,
+            is_null=True,
+        )
+        self._virtual_free_ids = list(
+            reversed(range(kv_cache_spec.physical_page_cap))
+        )
+        self._virtual_free_set = set(range(kv_cache_spec.physical_page_cap))
+        self._null_block = self._virtual_null_block
+        self._record_new_block_ids = False
+        self.new_block_ids = []
 
     def _required_pages(self, num_tokens: int) -> int:
         return cdiv(int(num_tokens), self.block_size)
@@ -106,6 +143,47 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         )
         return value
 
+    def _alloc_virtual(self, count: int) -> list[KVCacheBlock]:
+        if count < 0:
+            raise ValueError("virtual allocation count must be non-negative")
+        if count > len(self._virtual_free_ids):
+            raise RuntimeError(
+                "Q2C dedicated virtual page pool exhausted: "
+                f"need={count} free={len(self._virtual_free_ids)} "
+                f"cap={self.spec.physical_page_cap}"
+            )
+        out: list[KVCacheBlock] = []
+        for _ in range(count):
+            block_id = self._virtual_free_ids.pop()
+            if block_id not in self._virtual_free_set:
+                raise RuntimeError("Q2C virtual free-list corruption")
+            self._virtual_free_set.remove(block_id)
+            block = self._virtual_blocks[block_id]
+            if block.ref_cnt != 0 or block.is_null:
+                raise RuntimeError("Q2C virtual block was not free")
+            block.ref_cnt = 1
+            block.reset_hash()
+            out.append(block)
+        return out
+
+    def _free_virtual(self, blocks: Sequence[KVCacheBlock]) -> None:
+        for block in blocks:
+            if block.is_null:
+                continue
+            block_id = int(block.block_id)
+            if not 0 <= block_id < self.spec.physical_page_cap:
+                raise RuntimeError(f"Q2C invalid virtual block id {block_id}")
+            if block_id in self._virtual_free_set or block.ref_cnt != 1:
+                raise RuntimeError(f"Q2C virtual double-free/corruption id={block_id}")
+            block.ref_cnt = 0
+            block.reset_hash()
+            self._virtual_free_set.add(block_id)
+            self._virtual_free_ids.append(block_id)
+
+    @property
+    def virtual_free_pages(self) -> int:
+        return len(self._virtual_free_ids)
+
     def get_num_blocks_to_allocate(
         self,
         request_id: str,
@@ -116,21 +194,20 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         num_tokens_main_model: int,
         apply_admission_cap: bool = False,
     ) -> int:
-        del total_computed_tokens, num_local_computed_tokens, num_tokens_main_model
-        assert not new_computed_blocks
-        blocks = self.req_to_blocks.get(request_id, ())
-
-        if apply_admission_cap:
-            # Full-sequence admission must use the proven recycling peak rather
-            # than the complete logical row. The runner pins max scheduled
-            # tokens to active_reserve_pages * block_size.
-            return max(self.spec.physical_page_cap - self._real_count(request_id), 0)
-
-        required = self._required_pages(num_tokens)
-        desired = self._desired_pages(request_id, required)
-        return sum(
-            1 for idx in desired if idx >= len(blocks) or blocks[idx].is_null
+        # This return value is deliberately the number of *shared BlockPool*
+        # blocks required. QSA pages come from the dedicated virtual pool, so
+        # they cost zero shared blocks. Capacity is hard-enforced by
+        # _alloc_virtual and the 4,160-page peak invariant.
+        del (
+            request_id,
+            num_tokens,
+            total_computed_tokens,
+            num_local_computed_tokens,
+            num_tokens_main_model,
+            apply_admission_cap,
         )
+        assert not new_computed_blocks
+        return 0
 
     def allocate_new_blocks(
         self, request_id: str, num_tokens: int, num_tokens_main_model: int
@@ -142,11 +219,9 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         if len(blocks) < required:
             blocks.extend([self._null_block] * (required - len(blocks)))
         missing = [idx for idx in desired if blocks[idx].is_null]
-        fresh = self.block_pool.get_new_blocks(len(missing)) if missing else []
+        fresh = self._alloc_virtual(len(missing))
         for idx, block in zip(missing, fresh, strict=True):
             blocks[idx] = block
-        if self._record_new_block_ids:
-            self.new_block_ids.extend(b.block_id for b in fresh)
 
         previous_peak = self._peak_real_pages.get(request_id, 0)
         real = self._record_peak(request_id)
@@ -158,15 +233,17 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "real_pages": real,
                 "peak_real_pages": real,
                 "physical_page_cap": self.spec.physical_page_cap,
+                "virtual_free_pages": self.virtual_free_pages,
             })
-        # The runner constrains each scheduler chunk to the 64-page active
-        # reserve. Sticky resident pages plus the current work range must
-        # therefore never exceed the same 4,160-page product cap.
         hard_peak = self.spec.physical_page_cap
         if real > hard_peak:
             raise RuntimeError(
                 f"Q2C scheduler real-page peak {real} exceeds guarded peak {hard_peak}"
             )
+
+        # These virtual blocks MUST be returned: worker block-table state is
+        # updated from per-group new_block_ids. They are intentionally absent
+        # from take_new_block_ids(), so global KV zeroing never sees them.
         return fresh
 
     def remove_skipped_blocks(
@@ -197,7 +274,7 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             freed.append(block)
             blocks[idx] = self._null_block
         if freed:
-            self.block_pool.free_blocks(reversed(freed))
+            self._free_virtual(freed)
         after = self._record_peak(request_id)
 
         if freed:
@@ -267,12 +344,22 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
 
     def pop_blocks_for_free(self, request_id: str) -> list[KVCacheBlock]:
         blocks = self.req_to_blocks.pop(request_id, [])
+        real = [b for b in blocks if not b.is_null]
+        self._free_virtual(real)
         self.num_cached_block.pop(request_id, None)
         self._partial_hit_reqs.pop(request_id, None)
         self._processed_tokens.pop(request_id, None)
         self._boundary_emitted.discard(request_id)
         self._peak_real_pages.pop(request_id, None)
-        return [b for b in blocks if not b.is_null]
+        # Virtual QSA blocks are already recycled internally. Returning them
+        # would incorrectly hand them to the shared hybrid/Mamba BlockPool.
+        return []
+
+    def take_new_block_ids(self) -> list[int]:
+        # Global KV zeroing must never index the shared backing with virtual
+        # QSA IDs. The dedicated cache is written explicitly by QSA.
+        return []
+
 
 
 def _write_scheduler_event(payload: dict[str, Any]) -> None:
