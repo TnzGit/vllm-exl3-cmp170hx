@@ -413,10 +413,104 @@ def _q2c_run(
                     getattr(layer, "_q2c_staging", torch.empty(0)).numel()
                     * getattr(layer, "_q2c_staging", torch.empty(0)).element_size()
                 ),
+                "dedicated_bound": bool(
+                    getattr(layer, "_q2c_dedicated_bound", False)
+                ),
+                "dedicated_pages": int(layer.kv_cache.shape[0]),
+                "dedicated_bytes": int(
+                    layer.kv_cache.numel() * layer.kv_cache.element_size()
+                ),
+                "virtual_null_block_id": int(
+                    getattr(layer, "_q2c_virtual_null_block_id", -1)
+                ),
+                "placeholder_shape": list(
+                    getattr(layer, "_q2c_placeholder_shape", ())
+                ),
+                "placeholder_bytes": int(
+                    getattr(layer, "_q2c_placeholder_bytes", 0)
+                ),
             }
         )
 
 '''
+
+INIT_ANCHOR = """        self.kv_sharing_target_layer_name = None
+        self.kv_cache = torch.tensor([])
+        set_default_quant_scales(self, register_buffer=True)
+"""
+
+INIT_BLOCK = """        self.kv_sharing_target_layer_name = None
+        self.kv_cache = torch.tensor([])
+        _q2c_plan_obj = _q2c_plan()
+        if _q2c_plan_obj is not None:
+            _q2c_real_pages = int(_q2c_plan_obj["physical_page_count"])
+            _q2c_page_tokens = int(_q2c_plan_obj["page_tokens"])
+            _q2c_dedicated_pages = _q2c_real_pages + 1
+            self.register_buffer(
+                "_q2c_dedicated_kv_cache",
+                torch.empty(
+                    _q2c_dedicated_pages,
+                    self.num_kv_heads,
+                    _q2c_page_tokens,
+                    2 * self.head_dim,
+                    dtype=self.kv_cache_torch_dtype,
+                ),
+                persistent=False,
+            )
+            self._q2c_virtual_null_block_id = _q2c_real_pages
+            self._q2c_dedicated_expected_bytes = (
+                _q2c_dedicated_pages
+                * self.num_kv_heads
+                * _q2c_page_tokens
+                * (2 * self.head_dim)
+                * torch.tensor([], dtype=self.kv_cache_torch_dtype).element_size()
+            )
+        set_default_quant_scales(self, register_buffer=True)
+"""
+
+BIND_ANCHOR = """    def get_attn_backend(self) -> type[AttentionBackend]:
+        return self.attn_backend
+"""
+
+BIND_BLOCK = """    def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
+        _q2c_plan_obj = _q2c_plan()
+        if _q2c_plan_obj is None:
+            self.kv_cache = kv_cache
+            return
+
+        dedicated = getattr(self, "_q2c_dedicated_kv_cache", None)
+        if dedicated is None:
+            raise RuntimeError("Q2C dedicated KV buffer was not constructed")
+        expected = (
+            int(_q2c_plan_obj["physical_page_count"]) + 1,
+            self.num_kv_heads,
+            int(_q2c_plan_obj["page_tokens"]),
+            2 * self.head_dim,
+        )
+        if tuple(dedicated.shape) != expected:
+            raise RuntimeError(
+                f"Q2C dedicated KV shape mismatch: {tuple(dedicated.shape)} != {expected}"
+            )
+        if dedicated.dtype != torch.bfloat16 or not dedicated.is_cuda:
+            raise RuntimeError(
+                f"Q2C dedicated KV must be CUDA BF16, got {dedicated.device}/{dedicated.dtype}"
+            )
+        actual_bytes = dedicated.numel() * dedicated.element_size()
+        if actual_bytes != int(self._q2c_dedicated_expected_bytes):
+            raise RuntimeError("Q2C dedicated KV byte accounting mismatch")
+
+        # Generic vLLM still binds a normal-geometry placeholder tensor for the
+        # metadata group. Keep its provenance for evidence, but never use its
+        # shared-HMA storage for QSA reads/writes.
+        self._q2c_placeholder_shape = tuple(int(x) for x in kv_cache.shape)
+        self._q2c_placeholder_bytes = kv_cache.numel() * kv_cache.element_size()
+        self.kv_cache = dedicated
+        self.kv_cache[int(self._q2c_virtual_null_block_id)].zero_()
+        self._q2c_dedicated_bound = True
+
+    def get_attn_backend(self) -> type[AttentionBackend]:
+        return self.attn_backend
+"""
 
 SPEC_ANCHOR = """    def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
         return FullAttentionSpec(
@@ -507,6 +601,8 @@ def patch(path: Path, *, check_only: bool = False) -> str:
     for name, anchor in (
         ("import", IMPORT_ANCHOR),
         ("helper", HELPER_ANCHOR),
+        ("init", INIT_ANCHOR),
+        ("bind", BIND_ANCHOR),
         ("spec", SPEC_ANCHOR),
         ("run", RUN_ANCHOR),
     ):
@@ -515,6 +611,8 @@ def patch(path: Path, *, check_only: bool = False) -> str:
 
     out = src.replace(IMPORT_ANCHOR, IMPORT_BLOCK, 1)
     out = out.replace(HELPER_ANCHOR, HELPER, 1)
+    out = out.replace(INIT_ANCHOR, INIT_BLOCK, 1)
+    out = out.replace(BIND_ANCHOR, BIND_BLOCK, 1)
     out = out.replace(SPEC_ANCHOR, SPEC_BLOCK, 1)
     out = out.replace(RUN_ANCHOR, RUN_BLOCK, 1)
 
@@ -522,6 +620,9 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         MARKER,
         "VLLM_QWEN_KVMEM_Q2C_PLAN",
         "make_qsa_runtime_spec",
+        "_q2c_dedicated_kv_cache",
+        "_q2c_placeholder_shape",
+        "Q2C dedicated KV must be CUDA BF16",
         "Q2C runtime requires eager execution",
         "_q2c_table_evidence",
         "_q2c_publish_history",
