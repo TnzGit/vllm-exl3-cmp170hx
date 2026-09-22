@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 import torch
 
-from vllm.config.cache import CacheConfig
 from vllm.v1.core import kv_cache_utils
 from vllm.v1.core import single_type_kv_cache_manager as single_mgr
 from vllm.v1.kv_cache_interface import FullAttentionSpec
@@ -48,9 +47,10 @@ def _qsa_source() -> tuple[str, Path, str]:
     raise RuntimeError("cannot resolve installed Qwen4Exp QSA source")
 
 
-def _probe_packed_grouping() -> dict:
-    cache = CacheConfig()
-    cache.kv_cache_layout = "BLHNC"
+def _probe_packed_grouping(observed_full_block_tokens: int) -> dict:
+    cache = SimpleNamespace(
+        get_resolved_kv_cache_layout=lambda: KVCacheLayout.BLHNC
+    )
     resolved = cache.get_resolved_kv_cache_layout()
     fake = SimpleNamespace(
         cache_config=cache,
@@ -59,13 +59,13 @@ def _probe_packed_grouping() -> dict:
     )
     resident = make_qsa_resident_contract_spec()
     stock = FullAttentionSpec(
-        block_size=16,
+        block_size=int(observed_full_block_tokens),
         num_kv_heads=2,
         head_size=256,
         head_size_v=256,
         dtype=torch.bfloat16,
     )
-    specs = {"stock.attn": stock}
+    specs = {"stock.observed_full_source": stock}
     for i in range(12):
         specs[f"qsa.{i}"] = resident
     groups = kv_cache_utils._get_packed_kv_cache_groups(fake, specs)
@@ -157,7 +157,7 @@ def build_result(observed_full_block_tokens: int) -> dict:
         ),
     }
 
-    grouping = _probe_packed_grouping()
+    grouping = _probe_packed_grouping(observed_full_block_tokens)
     checks["custom_16t_spec_survives_packed_grouping"] = bool(grouping.get("ok"))
     go = all(checks.values())
 
