@@ -301,15 +301,16 @@ def summarize(
         and int(trace_summary.get("max_history_pages", -1)) <= read_cap
         and trace_summary.get("per_layer_records") == expected_trace_by_layer
     )
-    paired_policy_gate = bool(
-        (expected_trace_sha256 is None or (
+    paired_trace_exact = bool(
+        expected_trace_sha256 is None
+        or (
             trace_summary is not None
             and trace_summary.get("sha256") == expected_trace_sha256
-        ))
-        and (
-            expected_scheduler_digest is None
-            or scheduler_digest == expected_scheduler_digest
         )
+    )
+    paired_policy_gate = bool(
+        expected_scheduler_digest is None
+        or scheduler_digest == expected_scheduler_digest
     )
     semantic_gate = bool(
         response.get("target_codes_in_order")
@@ -356,6 +357,7 @@ def summarize(
         "scheduler_gate": scheduler_gate,
         "memory_census_gate": memory_gate,
         "trace_gate": trace_gate,
+        "paired_trace_exact": paired_trace_exact,
         "paired_policy_gate": paired_policy_gate,
         "trace_enabled": trace_summary is not None,
         "records": len(prefill),

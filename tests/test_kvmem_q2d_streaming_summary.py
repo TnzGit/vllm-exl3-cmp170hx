@@ -227,10 +227,17 @@ def test_streaming_summary_gates_paired_policy_digests():
         _response(), _rows(), _scheduler(), _plan(), trace,
         "staged_copy", "b" * 64, digest,
     )
+    assert result["paired_trace_exact"] is True
     assert result["paired_policy_gate"] is True
     result = _load().summarize(
         _response(), _rows(), _scheduler(), _plan(), trace,
         "staged_copy", "c" * 64, digest,
+    )
+    assert result["paired_trace_exact"] is False
+    assert result["paired_policy_gate"] is True
+    result = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan(), trace,
+        "staged_copy", "b" * 64, "d" * 64,
     )
     assert result["paired_policy_gate"] is False
 
