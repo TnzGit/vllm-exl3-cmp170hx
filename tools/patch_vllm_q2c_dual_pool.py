@@ -93,6 +93,10 @@ def _q2c_dual_pool_enabled(groups: list[KVCacheGroupSpec]) -> bool:
     if not os.environ.get("VLLM_QWEN_KVMEM_Q2C_PLAN"):
         return False
     private = [g for g in groups if _q2c_is_private_group(g)]
+    if not private:
+        # Internal recursive sizing of the regular/Mamba sub-pool remains
+        # stock even though the process-wide Q2C env flag is set.
+        return False
     if len(private) != 1:
         raise RuntimeError(
             f"Q2C requires exactly one private QSA group, got {len(private)}"
@@ -342,6 +346,12 @@ CORE_SINGLE_WORKER_NEW = """    if any(
     min_num_blocks = min(
 """
 
+WORKER_IMPORT_OLD = """import math
+"""
+WORKER_IMPORT_NEW = """import math
+import os
+"""
+
 WORKER_ALLOC_OLD = '''    sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
     assert len(sizes) == 1, "KV cache tensors must share one backing allocation."
     raw_size = sizes.pop()
@@ -529,7 +539,8 @@ def patch_core(src: str) -> str:
 def patch_worker(src: str) -> str:
     if MARKER_WORKER in src:
         return src
-    return replace_once(src, WORKER_ALLOC_OLD, WORKER_ALLOC_NEW, "worker allocate")
+    out = replace_once(src, WORKER_IMPORT_OLD, WORKER_IMPORT_NEW, "worker import")
+    return replace_once(out, WORKER_ALLOC_OLD, WORKER_ALLOC_NEW, "worker allocate")
 
 
 def main() -> int:
