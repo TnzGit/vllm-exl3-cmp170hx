@@ -32,8 +32,9 @@ def agg(rows):
     return out
 
 def summarize(rows, main_weights_s):
-    control=[r for r in rows if r["arm"]=="control"]
-    prefetch=[r for r in rows if r["arm"]=="prefetch"]
+    control=[r for r in rows if r["arm"]=="control" and r.get("eligible", True)]
+    prefetch=[r for r in rows if r["arm"]=="prefetch" and r.get("eligible", True)]
+    excluded=[r for r in rows if r["arm"]=="excluded" or not r.get("eligible", True)]
     c=agg(control); p=agg(prefetch)
     total_bytes=c["file_bytes"]+p["file_bytes"]
     share=p["file_bytes"]/total_bytes if total_bytes else None
@@ -44,6 +45,13 @@ def summarize(rows, main_weights_s):
       "shard_prefetch_ab_valid":valid,
       "main_weights_s":main_weights_s,
       "control":c, "prefetch":p,
+      "excluded":{
+        "count":len(excluded),
+        "file_bytes":sum(int(r["file_bytes"]) for r in excluded),
+        "file_gib":sum(int(r["file_bytes"]) for r in excluded)/GIB,
+        "files":[r["file"] for r in excluded],
+        "total_shard_wall_s":sum(float(r["total_shard_wall_s"]) for r in excluded),
+      },
       "balance":{"prefetch_byte_share":share,"byte_balance_ok": bool(share is not None and 0.40<=share<=0.60)},
       "comparison":{
         "prefetch_vs_control_speedup":speedup,
@@ -55,7 +63,9 @@ def summarize(rows, main_weights_s):
       "interpretation_contract":{
         "single_boot_interleaved":True,
         "prefetch_primitive":"vllm._prefetch_checkpoint",
-        "prefetch_scope":"same shard only; thread joined before next shard",
+        "prefetch_scope":"same eligible model shard only; thread joined before next shard",
+        "ab_population":"model-*.safetensors only",
+        "excluded_population":"non-model safetensors remain unchanged and are not aggregated",
         "projection_is_not_qualification":True,
       },
     }
