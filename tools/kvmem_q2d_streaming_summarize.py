@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -21,7 +22,12 @@ def summarize(
     scheduler_rows: list[dict[str, Any]],
     plan: dict[str, Any],
     trace_summary: dict[str, Any] | None = None,
+    expected_io_mode: str = "staged_copy",
+    expected_trace_sha256: str | None = None,
+    expected_scheduler_digest: str | None = None,
 ) -> dict[str, Any]:
+    if expected_io_mode not in ("staged_copy", "direct_dedicated_slots"):
+        raise ValueError(f"unsupported expected_io_mode: {expected_io_mode}")
     prompt_tokens = int(plan["query_span"][1])
     chunk_tokens = int(plan["scheduler_chunk_tokens"])
     expected_layers = int(plan["expected_qsa_layers"])
@@ -79,6 +85,7 @@ def summarize(
         "d2h_bytes_total",
         "h2d_bytes_total",
         "read_table_mode",
+        "io_mode",
         "write_partition",
         "read_partition",
         "forward_exposed_wall_seconds",
@@ -102,6 +109,7 @@ def summarize(
         "h2d_wait_seconds",
         "h2d_finish_seconds",
         "d2d_copy_submit_seconds",
+        "publication_oracle_gather_submit_seconds",
         "trace_wall_seconds",
         "trace_records_total",
         "trace_bytes_total",
@@ -117,6 +125,14 @@ def summarize(
             math.isfinite(float(row[field])) and float(row[field]) >= 0.0
             for row in events
             for field in timing_fields
+        )
+    )
+    io_mode_gate = bool(
+        fields_gate
+        and all(row["io_mode"] == expected_io_mode for row in events)
+        and (
+            expected_io_mode != "direct_dedicated_slots"
+            or all(float(row["d2d_copy_submit_seconds"]) == 0.0 for row in events)
         )
     )
     capacity_gate = bool(
@@ -185,6 +201,17 @@ def summarize(
         and sum(int(row.get("freed_pages", 0)) for row in reclaims)
         >= expected_published
     )
+    normalized_scheduler_rows = [
+        {key: value for key, value in row.items() if key != "request_id"}
+        for row in scheduler_rows
+    ]
+    scheduler_digest = hashlib.sha256(
+        json.dumps(
+            normalized_scheduler_rows,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     memory_rows = [
         row for row in worker_rows if row.get("event") == "q2e_memory_census"
     ]
@@ -195,6 +222,17 @@ def summarize(
         and all(count == 1 for count in memory_counts.values())
         and all(
             int(row.get("page_bytes", 0)) == 32768
+            and row.get("io_mode") == expected_io_mode
+            and row.get("backing_tensor") == (
+                "dedicated_qsa_cache"
+                if expected_io_mode == "direct_dedicated_slots"
+                else "staging"
+            )
+            and row.get("staging_role") == (
+                "allocated_unused"
+                if expected_io_mode == "direct_dedicated_slots"
+                else "transfer_bounce"
+            )
             and int(row.get("addressable_pages", 0)) == cap
             and int(row.get("write_pages", 0)) == write_cap
             and int(row.get("read_pages", 0)) == read_cap
@@ -254,22 +292,33 @@ def summarize(
         and int(trace_summary.get("max_history_pages", -1)) <= read_cap
         and trace_summary.get("per_layer_records") == expected_trace_by_layer
     )
+    paired_policy_gate = bool(
+        (expected_trace_sha256 is None or (
+            trace_summary is not None
+            and trace_summary.get("sha256") == expected_trace_sha256
+        ))
+        and (
+            expected_scheduler_digest is None
+            or scheduler_digest == expected_scheduler_digest
+        )
+    )
     semantic_gate = bool(
         response.get("target_codes_in_order")
         and response.get("finish_reason") == "stop"
         and int(response.get("usage", {}).get("prompt_tokens", -1)) == prompt_tokens
     )
     evidence_gate = bool(
-        coverage_gate and fields_gate and timing_gate and capacity_gate and mapping_gate
+        coverage_gate and fields_gate and timing_gate and io_mode_gate
+        and capacity_gate and mapping_gate
         and cpu_gate and publication_gate and scheduler_gate and memory_gate
-        and trace_gate
+        and trace_gate and paired_policy_gate
     )
     go = bool(evidence_gate and semantic_gate)
     if go:
         classification = "Q2D_CPU_AUTHORITATIVE_STREAMING_SEMANTIC_GO"
     elif (
-        not coverage_gate or not fields_gate or not timing_gate
-        or not memory_gate or not trace_gate
+        not coverage_gate or not fields_gate or not timing_gate or not io_mode_gate
+        or not memory_gate or not trace_gate or not paired_policy_gate
     ):
         classification = "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
     elif not scheduler_gate or not capacity_gate:
@@ -289,6 +338,8 @@ def summarize(
         "coverage_gate": coverage_gate,
         "fields_gate": fields_gate,
         "timing_gate": timing_gate,
+        "io_mode_gate": io_mode_gate,
+        "io_mode": expected_io_mode,
         "capacity_gate": capacity_gate,
         "mapping_gate": mapping_gate,
         "cpu_authority_gate": cpu_gate,
@@ -296,6 +347,7 @@ def summarize(
         "scheduler_gate": scheduler_gate,
         "memory_census_gate": memory_gate,
         "trace_gate": trace_gate,
+        "paired_policy_gate": paired_policy_gate,
         "trace_enabled": trace_summary is not None,
         "records": len(prefill),
         "all_worker_events": len(events),
@@ -391,6 +443,9 @@ def summarize(
         "trace_expected_history_pages": expected_trace_history_pages,
         "trace_expected_missing_pages": expected_trace_missing_pages,
         "trace_summary": trace_summary,
+        "scheduler_policy_digest": scheduler_digest,
+        "expected_trace_sha256": expected_trace_sha256,
+        "expected_scheduler_policy_digest": expected_scheduler_digest,
     }
 
 
@@ -402,6 +457,13 @@ def main() -> int:
     ap.add_argument("--plan", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--trace-summary", type=Path)
+    ap.add_argument(
+        "--expected-io-mode",
+        choices=("staged_copy", "direct_dedicated_slots"),
+        default="staged_copy",
+    )
+    ap.add_argument("--expected-trace-sha256")
+    ap.add_argument("--expected-scheduler-digest")
     args = ap.parse_args()
     result = summarize(
         json.loads(args.response.read_text()),
@@ -409,6 +471,9 @@ def main() -> int:
         load_jsonl(args.scheduler_stats),
         json.loads(args.plan.read_text()),
         json.loads(args.trace_summary.read_text()) if args.trace_summary else None,
+        args.expected_io_mode,
+        args.expected_trace_sha256,
+        args.expected_scheduler_digest,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))

@@ -16,7 +16,11 @@ MAXLEN="${MAX_MODEL_LEN:-161000}"
 MAXTOK="${K1Q2D_MAX_TOKENS:-512}"
 MAX_BATCHED="${K1Q2D_MAX_NUM_BATCHED_TOKENS:-1024}"
 Q2E_PROFILE="${K1Q2E_PROFILE:-0}"
+Q2E_DIRECT_IO="${K1Q2E_DIRECT_IO:-0}"
 Q2E_TRACE_MAX_BYTES="${K1Q2E_TRACE_MAX_BYTES:-268435456}"
+Q2E_EXPECTED_PLAN_SHA256="${K1Q2E_EXPECTED_PLAN_SHA256:-}"
+Q2E_EXPECTED_TRACE_SHA256="${K1Q2E_EXPECTED_TRACE_SHA256:-}"
+Q2E_EXPECTED_SCHEDULER_DIGEST="${K1Q2E_EXPECTED_SCHEDULER_DIGEST:-}"
 if [[ "$GPU_MEM_UTIL" != "0.92" || "$MAXLEN" != "161000" || "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2D requires gpu=0.92 maxlen=161000 chunk=1024" >&2
   exit 2
@@ -24,6 +28,25 @@ fi
 if [[ "$Q2E_PROFILE" != "0" && "$Q2E_PROFILE" != "1" ]]; then
   echo "REFUSE: K1Q2E_PROFILE must be 0 or 1" >&2
   exit 2
+fi
+if [[ "$Q2E_DIRECT_IO" != "0" && "$Q2E_DIRECT_IO" != "1" ]]; then
+  echo "REFUSE: K1Q2E_DIRECT_IO must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$Q2E_DIRECT_IO" == "1" && "$Q2E_PROFILE" != "1" ]]; then
+  echo "REFUSE: direct I/O experiment requires K1Q2E_PROFILE=1" >&2
+  exit 2
+fi
+if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
+  for digest in \
+    "$Q2E_EXPECTED_PLAN_SHA256" \
+    "$Q2E_EXPECTED_TRACE_SHA256" \
+    "$Q2E_EXPECTED_SCHEDULER_DIGEST"; do
+    if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "REFUSE: direct I/O requires all paired baseline SHA256 digests" >&2
+      exit 2
+    fi
+  done
 fi
 if [[ ! "$Q2E_TRACE_MAX_BYTES" =~ ^[0-9]+$ ]] || (( Q2E_TRACE_MAX_BYTES < 1048576 )); then
   echo "REFUSE: K1Q2E_TRACE_MAX_BYTES must be an integer >= 1048576" >&2
@@ -212,6 +235,12 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/kvmem_qsa_make_q2d_runtime_plan.py" \
   --q2c-plan "$Q2C_PLAN" --out "$PLAN" | tee "$OUT/q2d_streaming_plan.stdout.json"
+PLAN_SHA256=$(sha256sum "$PLAN" | awk '{print $1}')
+echo "$PLAN_SHA256" > "$OUT/q2d_streaming_plan.sha256"
+if [[ "$Q2E_DIRECT_IO" == "1" && "$PLAN_SHA256" != "$Q2E_EXPECTED_PLAN_SHA256" ]]; then
+  echo "REFUSE: direct I/O plan differs from paired baseline" >&2
+  exit 2
+fi
 
 XID0=$(xid_now); XID0=${XID0:-0}
 echo "xid_before=$XID0"
@@ -229,6 +258,11 @@ if [[ "$Q2E_PROFILE" == "1" ]]; then
 else
   unset VLLM_QWEN_KVMEM_Q2E_TRACE_PATH
   unset VLLM_QWEN_KVMEM_Q2E_TRACE_MAX_BYTES
+fi
+if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
+  export VLLM_QWEN_KVMEM_Q2E_DIRECT_IO=1
+else
+  unset VLLM_QWEN_KVMEM_Q2E_DIRECT_IO
 fi
 PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
 VLLM_QWEN_KVMEM_Q2D_RUNTIME_PLAN="$PLAN" \
@@ -261,12 +295,21 @@ test -s "$WORKER_STATS"
 test -s "$SCHED_STATS"
 
 TRACE_ARGS=()
+IO_ARGS=(--expected-io-mode staged_copy)
+POLICY_ARGS=()
 if [[ "$Q2E_PROFILE" == "1" ]]; then
   test -s "$TRACE"
   PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
     "$V/bin/python" "$REPO/tools/kvmem_q2e_trace_summarize.py" \
     --trace "$TRACE" --out "$TRACE_SUMMARY"
   TRACE_ARGS=(--trace-summary "$TRACE_SUMMARY")
+fi
+if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
+  IO_ARGS=(--expected-io-mode direct_dedicated_slots)
+  POLICY_ARGS=(
+    --expected-trace-sha256 "$Q2E_EXPECTED_TRACE_SHA256"
+    --expected-scheduler-digest "$Q2E_EXPECTED_SCHEDULER_DIGEST"
+  )
 fi
 
 echo "=== summarize ==="
@@ -276,6 +319,8 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   --response "$RESPONSE" --worker-stats "$WORKER_STATS" \
   --scheduler-stats "$SCHED_STATS" --plan "$PLAN" --out "$SUMMARY" \
   "${TRACE_ARGS[@]}" \
+  "${IO_ARGS[@]}" \
+  "${POLICY_ARGS[@]}" \
   | tee "$OUT/q2d_streaming_summary.stdout.json"
 SUMMARY_RC=$?
 set -e

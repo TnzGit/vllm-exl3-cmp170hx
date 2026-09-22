@@ -38,6 +38,7 @@ def _worker():
             rows.append({
                 "event": "q2d_streaming_runtime",
                 "layer": layer,
+                "io_mode": "staged_copy",
                 "first_pos": first,
                 "last_pos": last,
                 "query_rows": last - first + 1,
@@ -78,6 +79,7 @@ def _worker():
                 "h2d_wait_seconds": 0.001,
                 "h2d_finish_seconds": 0.001,
                 "d2d_copy_submit_seconds": 0.001,
+                "publication_oracle_gather_submit_seconds": 0.001,
                 "trace_wall_seconds": 0.001,
                 "trace_records_total": published + 1,
                 "trace_bytes_total": 100,
@@ -96,6 +98,9 @@ def _memory():
             "event": "q2e_memory_census",
             "layer": layer,
             "layer_id": layer_id,
+            "io_mode": "staged_copy",
+            "backing_tensor": "staging",
+            "staging_role": "transfer_bounce",
             "page_bytes": 32768,
             "addressable_pages": 4160,
             "write_pages": 128,
@@ -185,6 +190,7 @@ def test_streaming_summary_validates_complete_trace_contract():
         "max_query_rows": 8,
         "max_history_pages": 0,
         "per_layer_records": {"0": 4, "1": 4},
+        "sha256": "a" * 64,
     }
     result = _load().summarize(
         _response(), _rows(), _scheduler(), _plan(), trace
@@ -195,3 +201,53 @@ def test_streaming_summary_validates_complete_trace_contract():
         _response(), _rows(), _scheduler(), _plan(), bad
     )
     assert result["trace_gate"] is False
+
+
+def test_streaming_summary_gates_paired_policy_digests():
+    trace = {
+        "complete": True,
+        "truncated": False,
+        "records": 8,
+        "history_pages": 0,
+        "missing_pages": 2,
+        "assigned_slots": 2,
+        "max_query_rows": 8,
+        "max_history_pages": 0,
+        "per_layer_records": {"0": 4, "1": 4},
+        "sha256": "b" * 64,
+    }
+    baseline = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan(), trace
+    )
+    digest = baseline["scheduler_policy_digest"]
+    result = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan(), trace,
+        "staged_copy", "b" * 64, digest,
+    )
+    assert result["paired_policy_gate"] is True
+    result = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan(), trace,
+        "staged_copy", "c" * 64, digest,
+    )
+    assert result["paired_policy_gate"] is False
+
+
+def test_streaming_summary_gates_expected_direct_io_mode():
+    rows = _rows()
+    for row in rows:
+        row["io_mode"] = "direct_dedicated_slots"
+        if row["event"] == "q2e_memory_census":
+            row["backing_tensor"] = "dedicated_qsa_cache"
+            row["staging_role"] = "allocated_unused"
+        if row["event"] == "q2d_streaming_runtime":
+            row["d2d_copy_submit_seconds"] = 0.0
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(), None,
+        "direct_dedicated_slots",
+    )
+    assert result["io_mode_gate"] is True
+    assert result["streaming_qualification_go"] is True
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(), None, "staged_copy"
+    )
+    assert result["io_mode_gate"] is False

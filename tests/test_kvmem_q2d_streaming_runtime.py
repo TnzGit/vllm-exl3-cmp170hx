@@ -12,10 +12,13 @@ from vllm_exl3.kvmem_q2d_scheduler_runtime import (
 )
 from vllm_exl3.kvmem_q2d_streaming_worker import (
     _bits_equal,
+    _direct_io_enabled,
     _layer_id,
     _logical_write_ids,
+    _stage_history,
 )
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
+from vllm_exl3.kvmem_vllm_offload import TransferObservation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +144,62 @@ def test_worker_write_partition_and_bit_comparison_are_strict():
     assert _bits_equal(left, right)
     right[0] = 2.0
     assert not _bits_equal(left, right)
+
+
+def test_direct_io_flag_is_strict(monkeypatch):
+    monkeypatch.delenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", raising=False)
+    assert _direct_io_enabled() is False
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", "1")
+    assert _direct_io_enabled() is True
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", "yes")
+    with pytest.raises(RuntimeError, match="must be 0 or 1"):
+        _direct_io_enabled()
+
+
+def test_direct_stage_history_uses_one_arbitrary_destination_job():
+    class _Backing:
+        def __init__(self):
+            self.calls = []
+
+        def stage_in(self, pages, destinations):
+            self.calls.append((list(pages), list(destinations)))
+            return TransferObservation(1, len(pages) * 32768, 0.1, 0.2)
+
+    backing = _Backing()
+    state = {
+        "backing": backing,
+        "direct_io": True,
+        "logical_to_slot": {},
+        "slot_to_logical": [None] * 4,
+        "slot_generations": [0] * 4,
+        "last_use": {},
+        "clock": 0,
+        "peak_slots": 0,
+        "peak_read_slots": 0,
+        "published": {10, 11, 12},
+        "h2d_bytes": 0,
+        "h2d_jobs": 0,
+        **{
+            f"h2d_{field}_total": 0.0
+            for field in (
+                "event_seconds", "wall_seconds", "prepare_seconds",
+                "submit_seconds", "wait_seconds", "finish_seconds",
+            )
+        },
+        "d2d_copy_submit_seconds_total": 0.0,
+    }
+    layer = type("Layer", (), {"_q2d_staging": torch.empty((2, 1))})()
+    result = _stage_history(
+        layer,
+        state,
+        {"write_page_count": 128},
+        [10, 11, 12],
+        torch.empty((132, 1)),
+    )
+    assert result[0] == 3
+    assert backing.calls == [([10, 11, 12], [128, 129, 130])]
+    assert state["h2d_jobs"] == 1
+    assert state["d2d_copy_submit_seconds_total"] == 0.0
 
 
 def test_streaming_read_state_satisfies_shared_bulk_lru_contract():

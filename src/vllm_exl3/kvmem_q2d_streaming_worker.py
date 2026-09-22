@@ -102,6 +102,13 @@ def _reset_trace_after_warmup_once() -> None:
     _TRACE_RESET_PATHS.add(path)
 
 
+def _direct_io_enabled() -> bool:
+    raw = os.environ.get("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", "0")
+    if raw not in ("0", "1"):
+        raise RuntimeError("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO must be 0 or 1")
+    return raw == "1"
+
+
 def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
     old = getattr(layer, "_q2d_streaming_state", None)
     if old is not None:
@@ -112,8 +119,10 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"Q2D staging page geometry mismatch: {page_bytes}")
     from vllm_exl3.kvmem_vllm_offload import single_tensor_cpu_backing
 
+    dedicated = layer.kv_cache
+    direct_io = _direct_io_enabled()
     backing = single_tensor_cpu_backing(
-        tensor=staging,
+        tensor=dedicated if direct_io else staging,
         page_size_bytes=page_bytes,
         num_cpu_blocks=int(plan["cpu_page_count"]),
         lineage=f"q2d-runtime:{layer.layer_name}",
@@ -133,6 +142,7 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
     }
     state = {
         "backing": backing,
+        "direct_io": direct_io,
         "logical_to_slot": {},
         "slot_to_logical": [None] * read_pages,
         "slot_generations": [0] * read_pages,
@@ -154,15 +164,18 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "trace_truncated": False,
         "trace_wall_seconds_total": 0.0,
         "d2d_copy_submit_seconds_total": 0.0,
+        "publication_oracle_gather_submit_seconds_total": 0.0,
         **timing_totals,
     }
     layer._q2d_streaming_state = state
-    dedicated = layer.kv_cache
     page_bytes = int(staging[0].numel() * staging.element_size())
     _write_event({
         "event": "q2e_memory_census",
         "layer": layer.layer_name,
         "layer_id": _layer_id(layer.layer_name),
+        "io_mode": "direct_dedicated_slots" if direct_io else "staged_copy",
+        "backing_tensor": "dedicated_qsa_cache" if direct_io else "staging",
+        "staging_role": "allocated_unused" if direct_io else "transfer_bounce",
         "page_bytes": page_bytes,
         "addressable_pages": int(plan["physical_page_count"]),
         "write_pages": int(plan["write_page_count"]),
@@ -250,27 +263,23 @@ def _publish_completed(
         write_ids = _logical_write_ids(
             chunk, block_table, int(plan["write_page_count"])
         )
+        gather_start = time.perf_counter()
         source = kv_cache.index_select(0, write_ids)
+        state["publication_oracle_gather_submit_seconds_total"] += (
+            time.perf_counter() - gather_start
+        )
         n = len(chunk)
-        staging[:n].copy_(source)
-        torch.cuda.synchronize()
-        obs = state["backing"].publish(chunk, list(range(n)))
+        direct_io = bool(state["direct_io"])
+        if direct_io:
+            publish_source_ids = [int(page) for page in write_ids.cpu().tolist()]
+        else:
+            staging[:n].copy_(source)
+            torch.cuda.synchronize()
+            publish_source_ids = list(range(n))
+        obs = state["backing"].publish(chunk, publish_source_ids)
         state["d2h_bytes"] += int(obs.transfer_bytes)
         state["d2h_jobs"] += int(obs.job_id != 0)
         _accumulate_transfer(state, "d2h", obs)
-
-        # Every page is immediately round-tripped while its scheduler-owned
-        # WRITE source is still intact. After this exact check the CPU copy is
-        # authoritative and the scheduler may safely recycle the WRITE ID.
-        restore = state["backing"].stage_in(chunk, list(range(n)))
-        state["h2d_bytes"] += int(restore.transfer_bytes)
-        state["h2d_jobs"] += int(restore.job_id != 0)
-        _accumulate_transfer(state, "h2d", restore)
-        exact = _bits_equal(staging[:n], source)
-        state["roundtrip_pages"] += n
-        state["roundtrip_exact"] = bool(state["roundtrip_exact"] and exact)
-        if not exact:
-            raise RuntimeError("Q2D CPU publication roundtrip differs from WRITE source")
 
         before_slots = list(state["slot_to_logical"])
         before_pages = set(state["logical_to_slot"])
@@ -289,16 +298,35 @@ def _publish_completed(
             new_pages.append(int(page))
             new_slots.append(int(slot))
             new_generations.append(int(state["slot_generations"][slot]))
+        read_id_list = [read_base + slot for slot in local_slots]
         read_ids = torch.tensor(
-            [read_base + slot for slot in local_slots],
+            read_id_list,
             dtype=torch.int64,
             device=kv_cache.device,
         )
-        copy_start = time.perf_counter()
-        kv_cache.index_copy_(0, read_ids, staging[:n])
-        state["d2d_copy_submit_seconds_total"] += (
-            time.perf_counter() - copy_start
+
+        # Every page is immediately round-tripped while its scheduler-owned
+        # WRITE source is still intact. After this exact check the CPU copy is
+        # authoritative and the scheduler may safely recycle the WRITE ID.
+        restore = state["backing"].stage_in(
+            chunk, read_id_list if direct_io else list(range(n))
         )
+        state["h2d_bytes"] += int(restore.transfer_bytes)
+        state["h2d_jobs"] += int(restore.job_id != 0)
+        _accumulate_transfer(state, "h2d", restore)
+        restored = kv_cache.index_select(0, read_ids) if direct_io else staging[:n]
+        exact = _bits_equal(restored, source)
+        state["roundtrip_pages"] += n
+        state["roundtrip_exact"] = bool(state["roundtrip_exact"] and exact)
+        if not exact:
+            raise RuntimeError("Q2D CPU publication roundtrip differs from WRITE source")
+
+        if not direct_io:
+            copy_start = time.perf_counter()
+            kv_cache.index_copy_(0, read_ids, staging[:n])
+            state["d2d_copy_submit_seconds_total"] += (
+                time.perf_counter() - copy_start
+            )
         _touch(state, chunk)
         state["published"].update(chunk)
         trace_start = time.perf_counter()
@@ -353,24 +381,31 @@ def _stage_history(
     staging = layer._q2d_staging
     chunk_size = int(staging.shape[0])
     read_base = int(plan["write_page_count"])
-    for start in range(0, len(missing), chunk_size):
-        pages = missing[start:start + chunk_size]
-        slots = local_slots[start:start + chunk_size]
-        n = len(pages)
-        obs = state["backing"].stage_in(pages, list(range(n)))
+    if missing and bool(state["direct_io"]):
+        direct_read_ids = [read_base + slot for slot in local_slots]
+        obs = state["backing"].stage_in(missing, direct_read_ids)
         state["h2d_bytes"] += int(obs.transfer_bytes)
         state["h2d_jobs"] += int(obs.job_id != 0)
         _accumulate_transfer(state, "h2d", obs)
-        read_ids = torch.tensor(
-            [read_base + slot for slot in slots],
-            dtype=torch.int64,
-            device=kv_cache.device,
-        )
-        copy_start = time.perf_counter()
-        kv_cache.index_copy_(0, read_ids, staging[:n])
-        state["d2d_copy_submit_seconds_total"] += (
-            time.perf_counter() - copy_start
-        )
+    else:
+        for start in range(0, len(missing), chunk_size):
+            pages = missing[start:start + chunk_size]
+            slots = local_slots[start:start + chunk_size]
+            n = len(pages)
+            obs = state["backing"].stage_in(pages, list(range(n)))
+            state["h2d_bytes"] += int(obs.transfer_bytes)
+            state["h2d_jobs"] += int(obs.job_id != 0)
+            _accumulate_transfer(state, "h2d", obs)
+            read_ids = torch.tensor(
+                [read_base + slot for slot in slots],
+                dtype=torch.int64,
+                device=kv_cache.device,
+            )
+            copy_start = time.perf_counter()
+            kv_cache.index_copy_(0, read_ids, staging[:n])
+            state["d2d_copy_submit_seconds_total"] += (
+                time.perf_counter() - copy_start
+            )
     _touch(state, history_pages)
     state["peak_read_slots"] = max(
         int(state["peak_read_slots"]), len(state["logical_to_slot"])
@@ -419,7 +454,11 @@ def run_streaming_runtime(
                 "finish_seconds",
             )
         ]
-        + ["d2d_copy_submit_seconds_total", "trace_wall_seconds_total"]
+        + [
+            "d2d_copy_submit_seconds_total",
+            "publication_oracle_gather_submit_seconds_total",
+            "trace_wall_seconds_total",
+        ]
     )
     timing_before = {
         field: float(state[field]) for field in cumulative_timing_fields
@@ -564,6 +603,9 @@ def run_streaming_runtime(
     _write_event({
         "event": "q2d_streaming_runtime",
         "layer": layer.layer_name,
+        "io_mode": (
+            "direct_dedicated_slots" if state["direct_io"] else "staged_copy"
+        ),
         "first_pos": int(pos.min().item()),
         "last_pos": int(pos.max().item()),
         "query_rows": num_tokens,
