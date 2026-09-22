@@ -931,6 +931,8 @@ _METADATA_BULK_AB_STATS: dict[str, Any] = {
     "commit_bytes": 0,
     "commit_wall_s": 0.0,
     "committed_layers": 0,
+    "strided_commit_calls": 0,
+    "index_commit_calls": 0,
     "control_by_suffix": {},
     "deferred_by_suffix": {},
     "commit_by_suffix": {},
@@ -1014,12 +1016,12 @@ def _metadata_bulk_ab_stage(
     group[eid] = payload
 
 
-def _metadata_bulk_ab_dest(layer: Any, suffix: str, shard_id: str):
+def _metadata_bulk_ab_full_dest(layer: Any, suffix: str, shard_id: str):
     if shard_id in ("w1", "w3"):
         shard_idx = 0 if shard_id == "w1" else 1
-        return getattr(layer, "w13_" + suffix).data[1::2, shard_idx]
+        return getattr(layer, "w13_" + suffix).data[:, shard_idx]
     if shard_id == "w2":
-        return getattr(layer, "w2_" + suffix).data[1::2]
+        return getattr(layer, "w2_" + suffix).data
     raise ValueError(f"unknown EXL3 shard_id={shard_id}")
 
 
@@ -1031,20 +1033,23 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
         return
 
     n_experts = int(getattr(layer, "_exl3_n_experts", 0))
-    expected_ids = list(range(1, n_experts, 2))
-    if not expected_ids:
+    if n_experts < 2:
         raise RuntimeError("EXL3 metadata bulk A/B requires at least two experts")
 
     for (suffix, shard_id), by_eid in sorted(stage.items()):
         ids = sorted(int(eid) for eid in by_eid)
-        if ids != expected_ids:
+        if not ids or any((eid & 1) == 0 for eid in ids):
             raise RuntimeError(
-                f"EXL3 metadata bulk A/B incomplete {suffix}/{shard_id}: "
-                f"expected odd experts {expected_ids[:4]}... n={len(expected_ids)}, "
-                f"got {ids[:4]}... n={len(ids)}"
+                f"EXL3 metadata bulk A/B expected odd expert ids for "
+                f"{suffix}/{shard_id}, got {ids[:8]}"
+            )
+        if ids[-1] >= n_experts:
+            raise RuntimeError(
+                f"EXL3 metadata bulk A/B expert out of range "
+                f"{suffix}/{shard_id}: max={ids[-1]} n={n_experts}"
             )
 
-        dest = _metadata_bulk_ab_dest(layer, suffix, shard_id)
+        full_dest = _metadata_bulk_ab_full_dest(layer, suffix, shard_id)
         commit_t0 = time.perf_counter()
         if suffix in ("mcg", "mul1"):
             batch = torch.tensor(
@@ -1060,12 +1065,28 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
             if batch.dtype != dest.dtype:
                 batch = batch.to(dtype=dest.dtype)
 
-        if tuple(batch.shape) != tuple(dest.shape):
-            raise RuntimeError(
-                f"EXL3 metadata bulk commit shape mismatch {suffix}/{shard_id}: "
-                f"batch={tuple(batch.shape)} dest={tuple(dest.shape)}"
-            )
-        dest.copy_(batch, non_blocking=False)
+        contiguous_odd = ids == list(range(ids[0], ids[-1] + 1, 2))
+        if contiguous_odd:
+            dest = full_dest[ids[0] : ids[-1] + 1 : 2]
+            if tuple(batch.shape) != tuple(dest.shape):
+                raise RuntimeError(
+                    f"EXL3 metadata bulk commit shape mismatch "
+                    f"{suffix}/{shard_id}: batch={tuple(batch.shape)} "
+                    f"dest={tuple(dest.shape)}"
+                )
+            dest.copy_(batch, non_blocking=False)
+            _METADATA_BULK_AB_STATS["strided_commit_calls"] += 1
+        else:
+            if tuple(batch.shape[1:]) != tuple(full_dest.shape[1:]):
+                raise RuntimeError(
+                    f"EXL3 metadata bulk indexed shape mismatch "
+                    f"{suffix}/{shard_id}: batch={tuple(batch.shape)} "
+                    f"dest={tuple(full_dest.shape)}"
+                )
+            index = torch.tensor(ids, dtype=torch.long, device=full_dest.device)
+            batch_dev = batch.to(device=full_dest.device, non_blocking=False)
+            full_dest.index_copy_(0, index, batch_dev)
+            _METADATA_BULK_AB_STATS["index_commit_calls"] += 1
         elapsed = time.perf_counter() - commit_t0
         nbytes = int(batch.numel()) * int(batch.element_size())
 
@@ -1077,7 +1098,9 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
         bucket["bytes"] += nbytes
         bucket["wall_s"] += elapsed
 
-    _METADATA_BULK_AB_STATS["committed_layers"] += 1
+    if not getattr(layer, "_exl3_metadata_bulk_ab_committed_once", False):
+        _METADATA_BULK_AB_STATS["committed_layers"] += 1
+        layer._exl3_metadata_bulk_ab_committed_once = True
     layer._exl3_metadata_bulk_ab_stage = {}
 
 
