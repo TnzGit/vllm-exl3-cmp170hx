@@ -17,6 +17,7 @@ def promote(q2b: dict) -> dict:
         raise ValueError("expected Q2B CPU-backed shadow plan")
     out = dict(q2b)
     out["mode"] = "qsa_scheduler_owned_transition"
+    out["scheduler_chunk_tokens"] = int(q2b["active_reserve_tokens"])
     out["note"] = (
         "Q2C-transition uses the same frozen 64K sticky history and 1K active "
         "reserve. The scheduler owns 16-token QSA pages; after apply_min_pos "
