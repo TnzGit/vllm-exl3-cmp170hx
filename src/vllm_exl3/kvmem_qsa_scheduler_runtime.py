@@ -200,6 +200,8 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "real_pages": real,
                 "peak_real_pages": real,
                 "physical_page_cap": self.spec.physical_page_cap,
+                "private_pool_num_blocks": self.block_pool.num_gpu_blocks,
+                "private_pool_free_blocks": self.block_pool.get_num_free_blocks(),
             })
         # The runner constrains each scheduler chunk to the 64-page active
         # reserve. Sticky resident pages plus the current work range must
@@ -253,6 +255,8 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "freed_pages": len(freed),
                 "physical_page_cap": self.spec.physical_page_cap,
                 "peak_real_pages": self._peak_real_pages.get(request_id, after),
+                "private_pool_num_blocks": self.block_pool.num_gpu_blocks,
+                "private_pool_free_blocks": self.block_pool.get_num_free_blocks(),
             })
 
         if (
@@ -275,6 +279,8 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "resident_history_pages": len(self.spec.resident_pages),
                 "active_reserve_pages": self.spec.active_reserve_pages,
                 "peak_real_pages": self._peak_real_pages.get(request_id, after),
+                "private_pool_num_blocks": self.block_pool.num_gpu_blocks,
+                "private_pool_free_blocks": self.block_pool.get_num_free_blocks(),
             })
 
     def add_local_computed_blocks(
