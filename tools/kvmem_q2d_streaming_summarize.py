@@ -333,6 +333,8 @@ def summarize(
             == int(plan["cpu_page_count"]) * 32768
             and int(row.get("dynamic_table_bytes", 0))
             == int(plan["cpu_page_count"]) * 4
+            and int(row.get("selection_page_bitmap_bytes", 0))
+            == int(plan["cpu_page_count"])
             for row in memory_rows
         )
     )
@@ -560,6 +562,10 @@ def summarize(
             ),
             "cpu_backing_logical_bytes": sum(
                 int(row.get("cpu_backing_logical_bytes", 0)) for row in memory_rows
+            ),
+            "selection_page_bitmap_bytes": sum(
+                int(row.get("selection_page_bitmap_bytes", 0))
+                for row in memory_rows
             ),
             "max_cuda_memory_allocated_bytes": max(
                 (int(row.get("cuda_memory_allocated_bytes", 0)) for row in memory_rows),

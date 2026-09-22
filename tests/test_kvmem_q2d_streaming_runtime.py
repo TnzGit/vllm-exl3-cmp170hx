@@ -18,6 +18,7 @@ from vllm_exl3.kvmem_q2d_streaming_worker import (
     _layer_id,
     _logical_write_ids,
     _prepare_forward_table,
+    _selected_history_page_tensor,
     _stage_history,
     _update_dynamic_table,
     _verify_dynamic_table,
@@ -197,6 +198,24 @@ def test_persistent_dynamic_table_applies_deltas_and_forward_write_view():
             logical_to_slot={1: 7, 5: 5},
             read_base=128,
         )
+
+
+def test_selection_bitmap_matches_sorted_unique_reference_and_excludes_writes():
+    selected = torch.tensor([
+        [80, 16, -1, 17, 160],
+        [31, 80, 176, -1, 160],
+    ], dtype=torch.int32)
+    bitmap = torch.zeros(32, dtype=torch.bool)
+    current = torch.tensor([1, 10], dtype=torch.int64)
+    actual = _selected_history_page_tensor(selected, 16, current, bitmap)
+    reference = sorted({
+        int(token) // 16
+        for token in selected.flatten().tolist()
+        if int(token) >= 0 and int(token) // 16 not in {1, 10}
+    })
+    assert actual.tolist() == reference == [5, 11]
+    assert not bool(bitmap[1])
+    assert not bool(bitmap[10])
 
 
 def test_direct_io_flag_is_strict(monkeypatch):

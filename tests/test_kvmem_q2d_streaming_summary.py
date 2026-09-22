@@ -120,6 +120,7 @@ def _memory():
             "cpu_backing_pages": 10063,
             "cpu_backing_logical_bytes": 10063 * 32768,
             "dynamic_table_bytes": 10063 * 4,
+            "selection_page_bitmap_bytes": 10063,
         })
     return rows
 

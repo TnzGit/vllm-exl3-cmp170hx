@@ -167,6 +167,9 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
             dtype=torch.int32,
             device=dedicated.device,
         ),
+        "selection_page_bitmap": torch.zeros(
+            int(plan["cpu_page_count"]), dtype=torch.bool, device=dedicated.device
+        ),
         "current_write_pages": [],
         "verify_dynamic_table": _dynamic_table_oracle_enabled(),
         "dynamic_table_oracle_checks": 0,
@@ -214,6 +217,7 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "cpu_backing_pages": int(plan["cpu_page_count"]),
         "cpu_backing_logical_bytes": int(plan["cpu_page_count"]) * page_bytes,
         "dynamic_table_bytes": int(plan["cpu_page_count"]) * 4,
+        "selection_page_bitmap_bytes": int(plan["cpu_page_count"]),
         "cuda_memory_allocated_bytes": int(torch.cuda.memory_allocated()),
         "cuda_memory_reserved_bytes": int(torch.cuda.memory_reserved()),
         "cuda_max_memory_allocated_bytes": int(torch.cuda.max_memory_allocated()),
@@ -315,6 +319,31 @@ def _verify_dynamic_table(
     if not torch.equal(actual, wanted):
         raise RuntimeError("Q2E persistent dynamic table differs from exact mapping")
     return len(mapped_pages)
+
+
+def _selected_history_page_tensor(
+    selected_rows: torch.Tensor,
+    page_tokens: int,
+    current_pages: torch.Tensor,
+    bitmap: torch.Tensor,
+) -> torch.Tensor:
+    """Return the sorted unique selected history pages via a reusable bitmap."""
+    if bitmap.ndim != 1 or bitmap.dtype != torch.bool:
+        raise RuntimeError("Q2E selection bitmap must be one-dimensional bool")
+    if selected_rows.device != bitmap.device or current_pages.device != bitmap.device:
+        raise RuntimeError("Q2E selection tensors must share one device")
+    bitmap.zero_()
+    valid = selected_rows >= 0
+    pages = torch.div(
+        selected_rows.clamp_min(0).to(torch.int64),
+        page_tokens,
+        rounding_mode="floor",
+    )[valid]
+    if pages.numel():
+        bitmap.index_fill_(0, pages, True)
+    if current_pages.numel():
+        bitmap.index_fill_(0, current_pages, False)
+    return torch.nonzero(bitmap, as_tuple=False).flatten()
 
 
 def _validate_write_mapping(
@@ -627,6 +656,9 @@ def run_streaming_runtime(
     read_base = int(plan["write_page_count"])
     current_write_id_list = [int(page) for page in current_write_ids.cpu().tolist()]
     current_map = dict(zip(current_pages, current_write_id_list, strict=True))
+    current_pages_tensor = torch.tensor(
+        current_pages, dtype=torch.int64, device=selected.device
+    )
     if state["dynamic_table"].dtype != main_metadata.block_table.dtype:
         raise RuntimeError("Q2E dynamic table dtype differs from scheduler block table")
     table_refresh_start = time.perf_counter()
@@ -657,21 +689,15 @@ def run_streaming_runtime(
             end = start + size
             batch_selected = selected[start:end]
             selection_tensor_start = time.perf_counter()
-            valid = batch_selected >= 0
-            pages_tensor = torch.div(
-                batch_selected.clamp_min(0).to(torch.int64),
+            history_page_tensor = _selected_history_page_tensor(
+                batch_selected,
                 page_tokens,
-                rounding_mode="floor",
-            )[valid]
-            unique_pages = torch.unique(pages_tensor)
+                current_pages_tensor,
+                state["selection_page_bitmap"],
+            )
             selection_tensor_wall += time.perf_counter() - selection_tensor_start
             selection_cpu_start = time.perf_counter()
-            selected_pages = sorted(
-                int(page) for page in unique_pages.cpu().tolist()
-            )
-            history_pages = [
-                page for page in selected_pages if page not in current_map
-            ]
+            history_pages = [int(page) for page in history_page_tensor.cpu().tolist()]
             selection_cpu_filter_wall += time.perf_counter() - selection_cpu_start
             working = len(history_pages) + len(current_pages)
             if working <= cap and len(history_pages) <= read_cap:

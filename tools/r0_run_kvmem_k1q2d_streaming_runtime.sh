@@ -233,6 +233,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
 cmp -s "$QSA_BACKUP" "$QSA"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" -m pytest -q \
+  "$REPO/tests/test_kvmem_q2d_reload_shadow.py" \
   "$REPO/tests/test_kvmem_q2d_streaming_runtime.py" \
   "$REPO/tests/test_qsa_q2d_streaming_runtime_patch.py" \
   "$REPO/tests/test_kvmem_q2d_streaming_summary.py" \
