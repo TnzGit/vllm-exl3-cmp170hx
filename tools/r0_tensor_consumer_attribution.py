@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
 
 
@@ -121,12 +120,17 @@ def summarize(
     top.sort(key=lambda x: float(x["consumer_wall_s"]), reverse=True)
     top = top[:40]
 
-    trellis_consumer = float(
-        (by_suffix.get("trellis") or {}).get("consumer_wall_s", 0.0)
+    routed_trellis_consumer = float(
+        (by_scope_suffix.get("routed_expert|trellis") or {}).get(
+            "consumer_wall_s", 0.0
+        )
     )
-    exl3_meta_consumer = sum(
+    all_exl3_suffix_consumer = sum(
         float((by_suffix.get(suffix) or {}).get("consumer_wall_s", 0.0))
-        for suffix in ("suh", "svh", "mcg", "mul1")
+        for suffix in ("trellis", "suh", "svh", "mcg", "mul1")
+    )
+    generic_candidate_consumer = max(
+        0.0, all_exl3_suffix_consumer - routed_trellis_consumer
     )
     direct_copy = float(exl3.get("direct_trellis_copy_wall_s", 0.0))
     generic_copy = float(exl3.get("generic_copy_wall_s", 0.0))
@@ -154,16 +158,17 @@ def summarize(
         "by_scope_suffix": by_scope_suffix,
         "top_consumers": top,
         "exl3_copy_reconciliation": {
-            "trellis_consumer_wall_s": trellis_consumer,
+            "routed_trellis_consumer_wall_s": routed_trellis_consumer,
             "direct_trellis_copy_wall_s": direct_copy,
             "direct_trellis_prep_wall_s": prep,
-            "trellis_consumer_minus_direct_copy_s": (
-                trellis_consumer - direct_copy
+            "routed_trellis_consumer_minus_direct_copy_s": (
+                routed_trellis_consumer - direct_copy
             ),
-            "metadata_suffix_consumer_wall_s": exl3_meta_consumer,
+            "all_exl3_suffix_consumer_wall_s": all_exl3_suffix_consumer,
+            "generic_candidate_consumer_wall_s": generic_candidate_consumer,
             "generic_exl3_copy_wall_s": generic_copy,
-            "metadata_consumer_minus_generic_copy_s": (
-                exl3_meta_consumer - generic_copy
+            "generic_candidate_minus_generic_copy_s": (
+                generic_candidate_consumer - generic_copy
             ),
             "all_consumer_wall_s": total["consumer_wall_s"],
             "all_instrumented_exl3_copy_wall_s": measured_copy,
@@ -190,7 +195,10 @@ def summarize(
                 "downstream. It may exceed wall when worker threads run."
             ),
             "copy_reconciliation": (
-                "EXL3 copy timers are nested inside consumer wall and must be "
+                "Routed-expert trellis consumer wall is the closest iterator "
+                "denominator for direct-fill copy time. Other EXL3 suffix "
+                "consumer wall is the closest denominator for generic copy "
+                "time. Copy timers are nested inside consumer wall and must be "
                 "subtracted, not added."
             ),
         },
