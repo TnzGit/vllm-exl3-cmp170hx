@@ -4,6 +4,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tools" / "r0_run_kvmem_k1q2c_runtime_ownership.sh"
+LAUNCHER = ROOT / "tools" / "serve_cmp170hx_qwen_firstboot.sh"
 
 
 def test_q2c_runtime_runner_shell_syntax():
@@ -28,3 +29,9 @@ def test_q2c_runtime_runner_contract():
     assert "qsa_sha256_after" in src
     assert "STOP HERE" in src
     assert "240K" in src
+
+
+def test_firstboot_launcher_accepts_explicit_batch_token_cap():
+    src = LAUNCHER.read_text()
+    assert 'MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"' in src
+    assert 'ARGS+=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")' in src
