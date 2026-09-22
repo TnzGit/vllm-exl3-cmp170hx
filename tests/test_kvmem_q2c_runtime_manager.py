@@ -132,9 +132,50 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
     assert sum(x["freed_pages"] for x in reclaim) == 5904
     assert len(boundary) == 1
     assert boundary[0]["logical_row_pages"] == 10000
-    assert boundary[0]["real_pages_at_boundary"] == 4096
+    assert 4096 <= boundary[0]["real_pages_at_boundary"] <= 4160
     assert boundary[0]["physical_page_cap"] == 4160
     assert boundary[0]["peak_real_pages"] == 4160
+    assert boundary[0]["boundary_trigger"] == "allocation_reaches_boundary"
+
+
+def test_final_prompt_chunk_emits_boundary_without_post_process_callback(
+    monkeypatch, tmp_path
+):
+    stats = tmp_path / "sched.jsonl"
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH", str(stats))
+    plan = dict(
+        _plan(),
+        apply_min_pos=159488,
+        active_from_pos=159488,
+        active_page0=9968,
+    )
+    spec = make_qsa_runtime_spec(plan)
+    pool = _Pool()
+    mgr = QSAResidentRuntimeManager(
+        spec, block_pool=pool, enable_caching=False, kv_cache_group_id=0,
+        scheduler_block_size=1568, dcp_world_size=1, pcp_world_size=1,
+        needs_kv_cache_zeroing=False,
+    )
+    request_id = "final-chunk"
+    prompt_tokens = 159533
+    processed = 0
+    while processed < prompt_tokens:
+        mgr.remove_skipped_blocks(request_id, processed)
+        target = min(processed + 1024, prompt_tokens)
+        mgr.allocate_new_blocks(request_id, target, target)
+        processed = target
+
+    # Deliberately omit a final remove_skipped_blocks() call. This matches a
+    # request that ends in the first scheduler step crossing the boundary.
+    rows = [json.loads(x) for x in stats.read_text().splitlines()]
+    boundary = [x for x in rows if x["event"] == "q2c_scheduler_boundary"]
+    assert len(boundary) == 1
+    assert boundary[0]["boundary_trigger"] == "allocation_reaches_boundary"
+    assert boundary[0]["boundary_reached_tokens"] == prompt_tokens
+    assert boundary[0]["processed_computed_tokens"] == 158720
+    assert boundary[0]["logical_row_pages"] == 9971
+    assert 4096 <= boundary[0]["real_pages_at_boundary"] <= 4160
+    assert boundary[0]["physical_page_cap"] == 4160
 
 
 def test_post_boundary_allocation_only_grows_active_reserve():

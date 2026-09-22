@@ -184,6 +184,38 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
     def virtual_free_pages(self) -> int:
         return len(self._virtual_free_ids)
 
+    def _maybe_emit_boundary(
+        self, request_id: str, *, reached_tokens: int, trigger: str
+    ) -> None:
+        if (
+            reached_tokens < self.spec.shrink_from_pos
+            or request_id in self._boundary_emitted
+        ):
+            return
+        blocks = self.req_to_blocks.get(request_id, ())
+        real = self._real_count(request_id)
+        if real > self.spec.physical_page_cap:
+            raise RuntimeError(
+                f"Q2C boundary has {real} real pages above cap "
+                f"{self.spec.physical_page_cap}"
+            )
+        self._boundary_emitted.add(request_id)
+        _write_scheduler_event({
+            "event": "q2c_scheduler_boundary",
+            "request_id": request_id,
+            "boundary_trigger": trigger,
+            "boundary_reached_tokens": int(reached_tokens),
+            "processed_computed_tokens": int(
+                self._processed_tokens.get(request_id, 0)
+            ),
+            "logical_row_pages": len(blocks),
+            "real_pages_at_boundary": real,
+            "physical_page_cap": self.spec.physical_page_cap,
+            "resident_history_pages": len(self.spec.resident_pages),
+            "active_reserve_pages": self.spec.active_reserve_pages,
+            "peak_real_pages": self._peak_real_pages.get(request_id, real),
+        })
+
     def get_num_blocks_to_allocate(
         self,
         request_id: str,
@@ -240,6 +272,15 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             raise RuntimeError(
                 f"Q2C scheduler real-page peak {real} exceeds guarded peak {hard_peak}"
             )
+        # A request can finish in the same scheduler step that first reaches
+        # the frozen query boundary. In that case vLLM does not call
+        # remove_skipped_blocks() again, so allocation is the last authoritative
+        # scheduler lifecycle point at which boundary ownership can be emitted.
+        self._maybe_emit_boundary(
+            request_id,
+            reached_tokens=int(num_tokens),
+            trigger="allocation_reaches_boundary",
+        )
 
         # These virtual blocks MUST be returned: worker block-table state is
         # updated from per-group new_block_ids. They are intentionally absent
@@ -290,27 +331,11 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "peak_real_pages": self._peak_real_pages.get(request_id, after),
             })
 
-        if (
-            processed >= self.spec.shrink_from_pos
-            and request_id not in self._boundary_emitted
-        ):
-            if after > self.spec.physical_page_cap:
-                raise RuntimeError(
-                    f"Q2C boundary has {after} real pages above cap "
-                    f"{self.spec.physical_page_cap}"
-                )
-            self._boundary_emitted.add(request_id)
-            _write_scheduler_event({
-                "event": "q2c_scheduler_boundary",
-                "request_id": request_id,
-                "processed_computed_tokens": processed,
-                "logical_row_pages": len(blocks),
-                "real_pages_at_boundary": after,
-                "physical_page_cap": self.spec.physical_page_cap,
-                "resident_history_pages": len(self.spec.resident_pages),
-                "active_reserve_pages": self.spec.active_reserve_pages,
-                "peak_real_pages": self._peak_real_pages.get(request_id, after),
-            })
+        self._maybe_emit_boundary(
+            request_id,
+            reached_tokens=processed,
+            trigger="processed_reaches_boundary",
+        )
 
     def add_local_computed_blocks(
         self, request_id: str, new_computed_blocks: Sequence[KVCacheBlock],
