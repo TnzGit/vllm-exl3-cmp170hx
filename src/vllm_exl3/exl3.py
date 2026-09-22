@@ -1128,7 +1128,7 @@ def _pinned_trellis_stage_view(src: "torch.Tensor") -> tuple["torch.Tensor", flo
         if _LOAD_TRACE_PATH:
             _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_BUFFER_MAX_BYTES"] = max(
                 int(_LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_BUFFER_MAX_BYTES"]),
-                numel * int(torch.empty((), dtype=torch.int16).element_size()),
+                numel * 2,
             )
     return _PINNED_TRELLIS_STAGE[:numel].view(src.shape), alloc_wall
 
