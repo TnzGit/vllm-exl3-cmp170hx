@@ -446,10 +446,18 @@ WORKER_ALLOC_NEW = '''    # KVMEM_Q2C_DUAL_POOL_WORKER_V1
                 f"Q2C worker arena sizes invalid: "
                 f"stock={stock_sizes} private={private_sizes}"
             )
+        stock_size = stock_sizes.pop()
+        private_size = private_sizes.pop()
         buffers = {
-            False: torch.zeros(stock_sizes.pop(), dtype=torch.int8, device=device),
-            True: torch.zeros(private_sizes.pop(), dtype=torch.int8, device=device),
+            False: torch.zeros(stock_size, dtype=torch.int8, device=device),
+            True: torch.zeros(private_size, dtype=torch.int8, device=device),
         }
+        logger.info(
+            "Q2C dual-pool worker allocation: stock_bytes=%d "
+            "private_qsa_bytes=%d private_qsa_blocks=4161",
+            stock_size,
+            private_size,
+        )
     else:
         sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
         assert len(sizes) == 1, "KV cache tensors must share one backing allocation."
