@@ -22,6 +22,9 @@ def test_shard_prefetch_patch_is_odd_even_single_boot_ab():
     assert '"control"' in src
     assert '"file_bytes"' in src
     assert '"majflt"' in src
+    assert 'startswith("model-")' in src
+    assert '"excluded"' in src
+    assert '"eligible"' in src
     assert '"/proc/self/io"' in src
     assert '"io": io' in src
     assert '"delta": _exl3_delta' in src
