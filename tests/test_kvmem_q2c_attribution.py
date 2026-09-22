@@ -76,3 +76,14 @@ def test_output_bit_fingerprint_is_exact_and_sensitive():
     assert tensor_bit_fingerprint(left) == tensor_bit_fingerprint(right)
     right[0, 1] = -3.0
     assert tensor_bit_fingerprint(left) != tensor_bit_fingerprint(right)
+
+
+def test_optional_query_row_batch_working_sets(monkeypatch):
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_WORKSET_ROW_BATCHES", "2,1")
+    selected = torch.tensor([[0, 16], [32, 48], [64, 80], [96, 112]])
+    positions = torch.tensor([128, 129, 130, 131])
+    out = apply_progressive_visibility(
+        _plan(), selected, positions, apply_mask=False
+    )
+    assert out["row_batch_2_max_working_pages"] == 5
+    assert out["row_batch_1_max_working_pages"] == 3

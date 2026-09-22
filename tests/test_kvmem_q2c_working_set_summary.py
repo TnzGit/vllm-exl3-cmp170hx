@@ -12,7 +12,7 @@ def _plan():
     }
 
 
-def _row(layer, first, last, working, misses):
+def _row(layer, first, last, working, misses, batch512=5, batch256=3):
     return {
         "mode": "a_full_original",
         "layer": layer,
@@ -23,6 +23,8 @@ def _row(layer, first, last, working, misses):
         "unique_historical_pages_before": working - 2,
         "unique_nonresident_historical_pages_before": misses,
         "unique_pages_with_current_writes_before": working,
+        "row_batch_512_max_working_pages": batch512,
+        "row_batch_256_max_working_pages": batch256,
     }
 
 
@@ -34,12 +36,13 @@ def test_working_set_requires_split_when_any_layer_chunk_exceeds_cap():
         _row("b", 32, 63, 4, 1),
     ]
     out = summarize(rows, _plan())
-    assert out["classification"] == "Q2C_RELOAD_QUERY_ROW_SPLIT_REQUIRED"
+    assert out["classification"] == "Q2C_RELOAD_ROW_BATCH_512_FEASIBLE"
     assert out["evidence_gate"] is True
     assert out["max_working_pages_with_current_writes"] == 7
     assert out["chunks_over_cap"] == 1
     assert out["frozen_contract_spare_pages"] == 0
     assert out["full_history_cpu_backing_pages_per_layer"] == 7
+    assert out["largest_measured_feasible_query_row_batch"] == 512
 
 
 def test_working_set_accepts_whole_chunk_at_or_below_cap():

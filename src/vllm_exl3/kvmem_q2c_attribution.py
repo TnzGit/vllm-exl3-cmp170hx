@@ -75,6 +75,33 @@ def apply_progressive_visibility(
     unique_with_writes_before = _unique_count(
         torch.cat((valid_pages, current_pages))
     )
+    row_batch_working_sets: dict[str, int] = {}
+    row_batch_spec = os.environ.get(
+        "VLLM_QWEN_KVMEM_Q2C_WORKSET_ROW_BATCHES", ""
+    ).strip()
+    if row_batch_spec:
+        try:
+            row_batch_sizes = [
+                int(item) for item in row_batch_spec.split(",") if item.strip()
+            ]
+        except ValueError as exc:
+            raise RuntimeError("invalid Q2C workset row-batch list") from exc
+        if not row_batch_sizes or any(size <= 0 for size in row_batch_sizes):
+            raise RuntimeError("Q2C workset row-batch sizes must be positive")
+        for size in row_batch_sizes:
+            maximum = 0
+            for start in range(0, selected.shape[0], size):
+                end = min(start + size, selected.shape[0])
+                batch_valid = valid[start:end]
+                batch_pages = pages[start:end][batch_valid]
+                batch_current = current_pages[start:end]
+                maximum = max(
+                    maximum,
+                    _unique_count(torch.cat((batch_pages, batch_current))),
+                )
+            row_batch_working_sets[
+                f"row_batch_{size}_max_working_pages"
+            ] = maximum
     if apply_mask:
         selected.masked_fill_(would_drop, -1)
 
@@ -118,6 +145,7 @@ def apply_progressive_visibility(
         "post_square_sum": int((post_values * post_values).sum().item()),
         "post_row_weighted_sum": int((post_values * row_weights).sum().item()),
         "post_col_weighted_sum": int((post_values * col_weights).sum().item()),
+        **row_batch_working_sets,
     }
 
 

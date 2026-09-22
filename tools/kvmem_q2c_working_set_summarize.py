@@ -90,13 +90,34 @@ def summarize(rows: list[dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any
     logical_pages = math.ceil(prompt_tokens / int(plan["page_tokens"]))
     cpu_backing_bytes = logical_pages * PAGE_BYTES * expected_layers
     whole_chunk_feasible = bool(fields_gate and maximum <= cap)
+    row_batch_sizes = (512, 256)
+    row_batch_evidence: dict[str, dict[str, Any]] = {}
+    for size in row_batch_sizes:
+        field = f"row_batch_{size}_max_working_pages"
+        values = [int(row[field]) for row in records if field in row]
+        row_batch_evidence[str(size)] = {
+            "records": len(values),
+            "max_working_pages": max(values, default=0),
+            "p95_working_pages": _percentile(values, 0.95),
+            "events_over_cap": sum(value > cap for value in values),
+            "feasible": bool(len(values) == len(records) and max(values, default=cap + 1) <= cap),
+        }
+    feasible_batches = [
+        size for size in row_batch_sizes
+        if row_batch_evidence[str(size)]["feasible"]
+    ]
+    largest_feasible_batch = 1024 if whole_chunk_feasible else (
+        max(feasible_batches, default=0)
+    )
+    if whole_chunk_feasible:
+        classification = "Q2C_RELOAD_WHOLE_CHUNK_FEASIBLE"
+    elif largest_feasible_batch:
+        classification = f"Q2C_RELOAD_ROW_BATCH_{largest_feasible_batch}_FEASIBLE"
+    else:
+        classification = "Q2C_RELOAD_SMALLER_QUERY_ROW_SPLIT_REQUIRED"
     return {
         "schema": 1,
-        "classification": (
-            "Q2C_RELOAD_WHOLE_CHUNK_FEASIBLE"
-            if whole_chunk_feasible
-            else "Q2C_RELOAD_QUERY_ROW_SPLIT_REQUIRED"
-        ),
+        "classification": classification,
         "evidence_gate": bool(fields_gate and layer_gate),
         "mode": "a_full_original",
         "prompt_tokens": prompt_tokens,
@@ -114,6 +135,8 @@ def summarize(rows: list[dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any
         "p95_working_pages_with_current_writes": _percentile(working, 0.95),
         "chunks_over_cap": sum(value > cap for value in working),
         "whole_1024_query_chunk_feasible": whole_chunk_feasible,
+        "largest_measured_feasible_query_row_batch": largest_feasible_batch,
+        "row_batch_evidence": row_batch_evidence,
         "max_event": {
             key: max_row.get(key)
             for key in (
