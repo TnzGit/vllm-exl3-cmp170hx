@@ -11,6 +11,7 @@ from vllm_exl3.kvmem_q2d_scheduler_runtime import (
     validate_streaming_plan,
 )
 from vllm_exl3.kvmem_q2d_streaming_worker import _bits_equal, _logical_write_ids
+from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,3 +129,15 @@ def test_worker_write_partition_and_bit_comparison_are_strict():
     assert _bits_equal(left, right)
     right[0] = 2.0
     assert not _bits_equal(left, right)
+
+
+def test_streaming_read_state_satisfies_shared_bulk_lru_contract():
+    state = {
+        "logical_to_slot": {},
+        "slot_to_logical": [None] * 4,
+        "last_use": {},
+        "clock": 0,
+        "peak_slots": 0,
+    }
+    assert _assign_many(state, [10, 11], {10, 11}) == [0, 1]
+    assert state["peak_slots"] == 2

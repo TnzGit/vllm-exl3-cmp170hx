@@ -45,6 +45,7 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "slot_to_logical": [None] * read_pages,
         "last_use": {},
         "clock": 0,
+        "peak_slots": 0,
         "published": set(),
         "next_publish_page": 0,
         "saw_forward": False,

@@ -140,7 +140,7 @@ def _assign_slot(state: dict[str, Any], logical: int, protected: set[int]) -> in
     state["logical_to_slot"][logical] = slot
     state["slot_to_logical"][slot] = logical
     state["peak_slots"] = max(
-        int(state["peak_slots"]), len(state["logical_to_slot"])
+        int(state.get("peak_slots", 0)), len(state["logical_to_slot"])
     )
     return slot
 
@@ -176,7 +176,7 @@ def _assign_many(
         state["logical_to_slot"][page] = slot
         state["slot_to_logical"][slot] = page
     state["peak_slots"] = max(
-        int(state["peak_slots"]), len(state["logical_to_slot"])
+        int(state.get("peak_slots", 0)), len(state["logical_to_slot"])
     )
     return [int(state["logical_to_slot"][page]) for page in pages]
 
