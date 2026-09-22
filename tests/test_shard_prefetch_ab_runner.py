@@ -27,3 +27,11 @@ def test_runner_requires_ideal_window_and_restores_weight_utils():
 def test_watcher_accepts_local_model_start_marker():
     src=WATCHER.read_text()
     assert "Loading model from scratch" in src
+
+
+def test_runner_restores_before_propagating_invalid_summary_exit():
+    src=RUNNER.read_text()
+    assert 'SUMMARY_RC=${PIPESTATUS[0]}' in src
+    assert src.index('restore_weight_utils') < src.index('if (( SUMMARY_RC != 0 ))')
+    assert 'summary_exit_code=$SUMMARY_RC' in src
+    assert 'restore proof completed before exit' in src
