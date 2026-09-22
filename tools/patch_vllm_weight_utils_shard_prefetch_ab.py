@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import py_compile
+import shutil
 import sys
 from pathlib import Path
 
@@ -253,7 +254,7 @@ def patch(path: Path, *, check_only: bool = False) -> str:
     backup = path.with_suffix(path.suffix + ".exl3_shard_prefetch_ab.orig")
     if backup.exists():
         raise RuntimeError(f"stale backup exists: {backup}")
-    backup.write_text(src, encoding="utf-8")
+    shutil.copyfile(path, backup)
     path.write_text(out, encoding="utf-8")
     py_compile.compile(str(path), doraise=True)
     return f"patched (backup {backup})"
