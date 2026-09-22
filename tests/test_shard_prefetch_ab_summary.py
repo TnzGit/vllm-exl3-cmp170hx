@@ -25,3 +25,26 @@ def test_summary_rejects_unbalanced_bytes():
     out=m.summarize(rows,100.0)
     assert out["shard_prefetch_ab_valid"] is False
     assert out["balance"]["byte_balance_ok"] is False
+
+
+def test_summary_excludes_non_model_safetensors_from_balance():
+    m=load()
+    rows=[
+        row(0,'control',7.0,7.0,5.0,100),
+        row(1,'prefetch',7.0,5.0,7.0,50),
+        row(2,'control',7.0,7.0,5.0,100),
+        row(3,'prefetch',7.0,5.0,7.0,50),
+        {
+            **row(-1,'excluded',18.5,0.2,0.0,0),
+            "file":"ngram_embedding.safetensors",
+            "eligible":False,
+        },
+    ]
+    for r in rows[:-1]:
+        r["eligible"]=True
+    out=m.summarize(rows,100.0)
+    assert out["shard_prefetch_ab_valid"] is True
+    assert out["balance"]["prefetch_byte_share"] == 0.5
+    assert out["excluded"]["count"] == 1
+    assert out["excluded"]["files"] == ["ngram_embedding.safetensors"]
+    assert out["excluded"]["file_gib"] == 18.5
