@@ -40,6 +40,15 @@ class QSAResidentRuntimeSpec(AttentionSpec):
     def physical_page_cap(self) -> int:
         return len(self.resident_pages) + self.active_reserve_pages
 
+    @property
+    def q2c_private_pool(self) -> bool:
+        return True
+
+    @property
+    def private_pool_num_blocks(self) -> int:
+        # BlockPool permanently reserves block 0 as the null block.
+        return self.physical_page_cap + 1
+
     def max_memory_usage_bytes(self, vllm_config: Any) -> int:
         del vllm_config
         return self.physical_page_cap * self.page_size_bytes
@@ -60,7 +69,19 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
 
     def __init__(self, kv_cache_spec: QSAResidentRuntimeSpec, **kwargs) -> None:
         kwargs["enable_caching"] = False
+        self._stock_block_pool = kwargs["block_pool"]
+        kwargs["block_pool"] = BlockPool(
+            num_gpu_blocks=kv_cache_spec.private_pool_num_blocks,
+            enable_caching=False,
+            hash_block_size=kv_cache_spec.block_size,
+            enable_kv_cache_events=False,
+            metrics_collector=None,
+        )
         super().__init__(kv_cache_spec, **kwargs)
+        # Private QSA IDs belong to a different physical arena and must never
+        # enter the worker's global stock-pool zeroing/copy lists.
+        self._record_new_block_ids = False
+        self.new_block_ids = []
         self.spec = kv_cache_spec
         self._resident_set = frozenset(int(x) for x in kv_cache_spec.resident_pages)
         self._processed_tokens: dict[str, int] = {}
@@ -106,6 +127,25 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         )
         return value
 
+    def _private_num_blocks_to_allocate(
+        self,
+        request_id: str,
+        num_tokens: int,
+        new_computed_blocks: Sequence[KVCacheBlock],
+        apply_admission_cap: bool,
+    ) -> int:
+        assert not new_computed_blocks
+        blocks = self.req_to_blocks.get(request_id, ())
+        if apply_admission_cap:
+            return max(
+                self.spec.physical_page_cap - self._real_count(request_id), 0
+            )
+        required = self._required_pages(num_tokens)
+        desired = self._desired_pages(request_id, required)
+        return sum(
+            1 for idx in desired if idx >= len(blocks) or blocks[idx].is_null
+        )
+
     def get_num_blocks_to_allocate(
         self,
         request_id: str,
@@ -117,20 +157,22 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         apply_admission_cap: bool = False,
     ) -> int:
         del total_computed_tokens, num_local_computed_tokens, num_tokens_main_model
-        assert not new_computed_blocks
-        blocks = self.req_to_blocks.get(request_id, ())
-
-        if apply_admission_cap:
-            # Full-sequence admission must use the proven recycling peak rather
-            # than the complete logical row. The runner pins max scheduled
-            # tokens to active_reserve_pages * block_size.
-            return max(self.spec.physical_page_cap - self._real_count(request_id), 0)
-
-        required = self._required_pages(num_tokens)
-        desired = self._desired_pages(request_id, required)
-        return sum(
-            1 for idx in desired if idx >= len(blocks) or blocks[idx].is_null
+        private_needed = self._private_num_blocks_to_allocate(
+            request_id,
+            num_tokens,
+            new_computed_blocks,
+            apply_admission_cap,
         )
+        private_free = self.block_pool.get_num_free_blocks()
+        if private_needed > private_free:
+            raise RuntimeError(
+                "Q2C private QSA pool exhausted: "
+                f"needed={private_needed} free={private_free} "
+                f"pool_blocks={self.block_pool.num_gpu_blocks}"
+            )
+        # Stock KVCacheManager admission/allocation checks cover only the stock
+        # Mamba/regular pool. QSA capacity is independently guarded above.
+        return 0
 
     def allocate_new_blocks(
         self, request_id: str, num_tokens: int, num_tokens_main_model: int
@@ -272,7 +314,11 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         self._processed_tokens.pop(request_id, None)
         self._boundary_emitted.discard(request_id)
         self._peak_real_pages.pop(request_id, None)
-        return [b for b in blocks if not b.is_null]
+        real = [b for b in blocks if not b.is_null]
+        if real:
+            self.block_pool.free_blocks(reversed(real))
+        # Never hand private-pool blocks to the stock coordinator/pool.
+        return []
 
 
 def _write_scheduler_event(payload: dict[str, Any]) -> None:
