@@ -145,6 +145,8 @@ def summarize(trace_rows: list[dict], tensor_summary: dict, loader: dict) -> dic
             "bulk_commit_bytes": commit_bytes,
             "bulk_commit_wall_s": commit_wall,
             "committed_layers": int(stats.get("committed_layers", 0)),
+            "strided_commit_calls": int(stats.get("strided_commit_calls", 0)),
+            "index_commit_calls": int(stats.get("index_commit_calls", 0)),
             "total_wall_s": deferred_total,
             "ms_per_tensor_including_commit": (
                 1000.0 * deferred_total / deferred_calls
