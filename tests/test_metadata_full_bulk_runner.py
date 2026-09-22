@@ -16,6 +16,11 @@ def test_full_bulk_runner_is_exact_and_production_shaped():
     assert 'EXPECTED_SHA="${EXPECTED_SHA:?set EXPECTED_SHA to the exact qualification head}"' in src
     assert 'VLLM_EXL3_METADATA_FULL_BULK="$full"' in src
     assert 'NUM_SPEC_TOKENS=3' in src
+    assert 'export PATH="$CUDA_HOME/bin:$V/bin:$PATH"' in src
+    assert 'export VIRTUAL_ENV="$V"' in src
+    assert 'local launcher_pid=$!' in src
+    assert 'kill -0 "$launcher_pid"' in src
+    assert 'ENGINE LAUNCHER EXITED BEFORE HEALTHY' in src
     assert '/health' in src
     assert 'run_case control_a 0' in src
     assert 'run_case full 1' in src
