@@ -179,6 +179,7 @@ def test_direct_stage_history_uses_one_arbitrary_destination_job():
         "published": {10, 11, 12},
         "h2d_bytes": 0,
         "h2d_jobs": 0,
+        "direct_load_verified_pages": 0,
         **{
             f"h2d_{field}_total": 0.0
             for field in (
