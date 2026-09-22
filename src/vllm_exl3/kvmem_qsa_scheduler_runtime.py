@@ -1,10 +1,10 @@
 """K1-Q2C live scheduler ownership for bounded QSA history.
 
-Research-only transition manager for vLLM 0.29. Before the configured
-transition boundary it behaves like full attention at 16-token page geometry.
-Once the scheduler has safely processed that boundary it releases all
-non-resident historical pages, preserves a full logical block-table row with
-null holes, and keeps only the frozen sticky history plus bounded active pages.
+Research-only frozen-plan manager for vLLM 0.29. QSA keeps full logical history
+at 16-token page geometry while processed nonresident historical pages are
+progressively reclaimed. Real QSA page IDs live in a dedicated virtual pool,
+not the shared hybrid/Mamba BlockPool; the worker uses model-owned dedicated KV
+storage and masks reclaimed logical history before attention.
 """
 
 from __future__ import annotations
