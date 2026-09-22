@@ -10,7 +10,11 @@ from vllm_exl3.kvmem_q2d_scheduler_runtime import (
     make_qsa_streaming_spec,
     validate_streaming_plan,
 )
-from vllm_exl3.kvmem_q2d_streaming_worker import _bits_equal, _logical_write_ids
+from vllm_exl3.kvmem_q2d_streaming_worker import (
+    _bits_equal,
+    _layer_id,
+    _logical_write_ids,
+)
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
 
 
@@ -125,6 +129,9 @@ def test_scheduler_keeps_partial_decode_page_until_complete():
 
 
 def test_worker_write_partition_and_bit_comparison_are_strict():
+    assert _layer_id("model.layers.17.self_attn") == 17
+    with pytest.raises(RuntimeError, match="derive layer id"):
+        _layer_id("model.attn")
     table = torch.tensor([[0, 1, 63, 64]], dtype=torch.int32)
     assert _logical_write_ids([0, 1, 2], table, 64).tolist() == [0, 1, 63]
     with pytest.raises(RuntimeError, match="outside WRITE"):

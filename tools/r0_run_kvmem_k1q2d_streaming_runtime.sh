@@ -15,8 +15,18 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
 MAXTOK="${K1Q2D_MAX_TOKENS:-512}"
 MAX_BATCHED="${K1Q2D_MAX_NUM_BATCHED_TOKENS:-1024}"
+Q2E_PROFILE="${K1Q2E_PROFILE:-0}"
+Q2E_TRACE_MAX_BYTES="${K1Q2E_TRACE_MAX_BYTES:-268435456}"
 if [[ "$GPU_MEM_UTIL" != "0.92" || "$MAXLEN" != "161000" || "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2D requires gpu=0.92 maxlen=161000 chunk=1024" >&2
+  exit 2
+fi
+if [[ "$Q2E_PROFILE" != "0" && "$Q2E_PROFILE" != "1" ]]; then
+  echo "REFUSE: K1Q2E_PROFILE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "$Q2E_TRACE_MAX_BYTES" =~ ^[0-9]+$ ]] || (( Q2E_TRACE_MAX_BYTES < 1048576 )); then
+  echo "REFUSE: K1Q2E_TRACE_MAX_BYTES must be an integer >= 1048576" >&2
   exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -66,6 +76,8 @@ WORKER_STATS="$OUT/q2d_worker_stats.jsonl"
 SCHED_STATS="$OUT/q2d_scheduler_stats.jsonl"
 RESPONSE="$OUT/q2d_response.json"
 SUMMARY="$OUT/q2d_streaming_summary.json"
+TRACE="$OUT/q2e_access_trace.bin"
+TRACE_SUMMARY="$OUT/q2e_access_trace_summary.json"
 LOG="$OUT/logs/serve_q2d_streaming.log"
 LAUNCH_PID=""
 PATCHED=0
@@ -169,9 +181,11 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2d_streaming_runtime.sh"
 "$V/bin/python" -m py_compile \
   "$REPO/src/vllm_exl3/kvmem_q2d_scheduler_runtime.py" \
   "$REPO/src/vllm_exl3/kvmem_q2d_streaming_worker.py" \
+  "$REPO/src/vllm_exl3/kvmem_q2e_trace.py" \
   "$REPO/src/vllm_exl3/kvmem_vllm_offload.py" \
   "$REPO/tools/kvmem_qsa_make_q2d_runtime_plan.py" \
   "$REPO/tools/kvmem_q2d_streaming_summarize.py" \
+  "$REPO/tools/kvmem_q2e_trace_summarize.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2d_streaming_runtime.py"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2d_streaming_runtime.py" \
@@ -182,6 +196,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$REPO/tests/test_kvmem_q2d_streaming_runtime.py" \
   "$REPO/tests/test_qsa_q2d_streaming_runtime_patch.py" \
   "$REPO/tests/test_kvmem_q2d_streaming_summary.py" \
+  "$REPO/tests/test_kvmem_q2e_trace.py" \
   "$REPO/tests/test_kvmem_vllm_offload_adapter.py"
 
 echo "=== build exact frozen plans ==="
@@ -208,6 +223,13 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
 grep -Fq "# KVMEM_QSA_Q2D_STREAMING_RUNTIME_V1" "$QSA"
 
 echo "=== boot and run 160K Q2D streaming runtime ==="
+if [[ "$Q2E_PROFILE" == "1" ]]; then
+  export VLLM_QWEN_KVMEM_Q2E_TRACE_PATH="$TRACE"
+  export VLLM_QWEN_KVMEM_Q2E_TRACE_MAX_BYTES="$Q2E_TRACE_MAX_BYTES"
+else
+  unset VLLM_QWEN_KVMEM_Q2E_TRACE_PATH
+  unset VLLM_QWEN_KVMEM_Q2E_TRACE_MAX_BYTES
+fi
 PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
 VLLM_QWEN_KVMEM_Q2D_RUNTIME_PLAN="$PLAN" \
 VLLM_QWEN_KVMEM_Q2D_WORKER_STATS_PATH="$WORKER_STATS" \
@@ -221,15 +243,31 @@ MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 MAX_NUM_BATCHED_TOKENS="$MAX_BATCHED" POR
 LAUNCH_PID=$!
 wait_healthy
 guard_idle
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits \
+  > "$OUT/q2e_boot_gpu_processes.csv" 2> "$OUT/q2e_boot_gpu_processes.stderr" || true
 : > "$WORKER_STATS"
 : > "$SCHED_STATS"
+REQUEST_START=$("$V/bin/python" -c 'import time; print(time.perf_counter())')
 "$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py" \
   --port "$PORT" --case "$TURN_FILE" --max-tokens "$MAXTOK" \
   --out "$RESPONSE" | tee "$OUT/q2d_response.stdout.json"
+REQUEST_END=$("$V/bin/python" -c 'import time; print(time.perf_counter())')
+"$V/bin/python" -c \
+  'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' \
+  "$REQUEST_START" "$REQUEST_END" > "$OUT/q2e_request_wall_seconds.txt"
 guard_idle
 stop_engine
 test -s "$WORKER_STATS"
 test -s "$SCHED_STATS"
+
+TRACE_ARGS=()
+if [[ "$Q2E_PROFILE" == "1" ]]; then
+  test -s "$TRACE"
+  PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+    "$V/bin/python" "$REPO/tools/kvmem_q2e_trace_summarize.py" \
+    --trace "$TRACE" --out "$TRACE_SUMMARY"
+  TRACE_ARGS=(--trace-summary "$TRACE_SUMMARY")
+fi
 
 echo "=== summarize ==="
 set +e
@@ -237,6 +275,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/kvmem_q2d_streaming_summarize.py" \
   --response "$RESPONSE" --worker-stats "$WORKER_STATS" \
   --scheduler-stats "$SCHED_STATS" --plan "$PLAN" --out "$SUMMARY" \
+  "${TRACE_ARGS[@]}" \
   | tee "$OUT/q2d_streaming_summary.stdout.json"
 SUMMARY_RC=$?
 set -e

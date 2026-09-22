@@ -20,6 +20,10 @@ class TransferObservation:
     transfer_bytes: int
     event_seconds: float
     wall_seconds: float
+    prepare_seconds: float = 0.0
+    submit_seconds: float = 0.0
+    wait_seconds: float = 0.0
+    finish_seconds: float = 0.0
 
     @property
     def event_gib_s(self) -> float:
@@ -185,6 +189,8 @@ class VllmCPUPageBacking:
         if not logical_pages:
             raise ValueError("publish requires at least one page")
 
+        wall_start = time.perf_counter()
+        prepare_start = wall_start
         keys = [self._key(int(page)) for page in logical_pages]
         source_by_key = {
             key: int(gpu_page)
@@ -195,12 +201,14 @@ class VllmCPUPageBacking:
             raise RuntimeError("CPU offload manager refused page publication")
 
         store_keys = list(prepared.keys_to_store)
+        prepare_seconds = time.perf_counter() - prepare_start
         if not store_keys:
             return TransferObservation(
                 job_id=0,
                 transfer_bytes=0,
                 event_seconds=0.0,
-                wall_seconds=0.0,
+                wall_seconds=time.perf_counter() - wall_start,
+                prepare_seconds=prepare_seconds,
             )
         try:
             src_pages = [source_by_key[key] for key in store_keys]
@@ -208,7 +216,7 @@ class VllmCPUPageBacking:
             raise RuntimeError("manager returned an unknown store key") from exc
 
         job_id = self._job_id()
-        t0 = time.perf_counter()
+        submit_start = time.perf_counter()
         submitted = self.worker.submit_store(
             job_id,
             self._gpu_spec(src_pages),
@@ -221,20 +229,28 @@ class VllmCPUPageBacking:
                 success=False,
             )
             raise RuntimeError("CPU offload worker rejected store transfer")
+        submit_seconds = time.perf_counter() - submit_start
 
+        wait_start = time.perf_counter()
         self.worker.wait({job_id})
-        wall = time.perf_counter() - t0
+        wait_seconds = time.perf_counter() - wait_start
+        finish_start = time.perf_counter()
         result = self._finished(job_id)
         self.manager.complete_store(
             store_keys,
             self.req_context,
             success=True,
         )
+        finish_seconds = time.perf_counter() - finish_start
         return TransferObservation(
             job_id=job_id,
             transfer_bytes=int(result.transfer_size),
             event_seconds=float(result.transfer_time),
-            wall_seconds=wall,
+            wall_seconds=time.perf_counter() - wall_start,
+            prepare_seconds=prepare_seconds,
+            submit_seconds=submit_seconds,
+            wait_seconds=wait_seconds,
+            finish_seconds=finish_seconds,
         )
 
     def all_present(self, logical_pages: Sequence[int]) -> bool:
@@ -258,13 +274,16 @@ class VllmCPUPageBacking:
         if not logical_pages:
             raise ValueError("stage_in requires at least one page")
 
+        wall_start = time.perf_counter()
+        prepare_start = wall_start
         keys = [self._key(int(page)) for page in logical_pages]
         if not self.all_present(logical_pages):
             raise RuntimeError("stage-in requested a page missing from CPU backing")
 
         cpu_spec = self.manager.prepare_load(keys, self.req_context)
+        prepare_seconds = time.perf_counter() - prepare_start
         job_id = self._job_id()
-        t0 = time.perf_counter()
+        submit_start = time.perf_counter()
         submitted = self.worker.submit_load(
             job_id,
             cpu_spec,
@@ -273,16 +292,24 @@ class VllmCPUPageBacking:
         if not submitted:
             self.manager.complete_load(keys, self.req_context)
             raise RuntimeError("CPU offload worker rejected load transfer")
+        submit_seconds = time.perf_counter() - submit_start
 
+        wait_start = time.perf_counter()
         self.worker.wait({job_id})
-        wall = time.perf_counter() - t0
+        wait_seconds = time.perf_counter() - wait_start
+        finish_start = time.perf_counter()
         result = self._finished(job_id)
         self.manager.complete_load(keys, self.req_context)
+        finish_seconds = time.perf_counter() - finish_start
         return TransferObservation(
             job_id=job_id,
             transfer_bytes=int(result.transfer_size),
             event_seconds=float(result.transfer_time),
-            wall_seconds=wall,
+            wall_seconds=time.perf_counter() - wall_start,
+            prepare_seconds=prepare_seconds,
+            submit_seconds=submit_seconds,
+            wait_seconds=wait_seconds,
+            finish_seconds=finish_seconds,
         )
 
     def close(self) -> None:

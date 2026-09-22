@@ -31,6 +31,10 @@ def test_transfer_observation_bandwidth_helpers():
     )
     assert obs.event_gib_s == 4.0
     assert obs.wall_gib_s == 2.0
+    assert obs.prepare_seconds == 0.0
+    assert obs.submit_seconds == 0.0
+    assert obs.wait_seconds == 0.0
+    assert obs.finish_seconds == 0.0
 
 
 def test_adapter_reuses_generic_manager_worker_contract():

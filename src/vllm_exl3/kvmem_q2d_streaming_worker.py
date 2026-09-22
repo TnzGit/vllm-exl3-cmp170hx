@@ -5,11 +5,17 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+import time
 from typing import Any, Sequence
 
 import torch
 
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many, _touch
+
+
+_LAYER_INDEX_RE = re.compile(r"\.layers\.(\d+)\.")
+_TRACE_RESET_PATHS: set[Path] = set()
 
 
 def _write_event(payload: dict[str, Any]) -> None:
@@ -20,6 +26,80 @@ def _write_event(payload: dict[str, Any]) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
+def _layer_id(layer_name: str) -> int:
+    match = _LAYER_INDEX_RE.search(layer_name)
+    if match is None:
+        raise RuntimeError(f"Q2E cannot derive layer id from {layer_name!r}")
+    return int(match.group(1))
+
+
+def _accumulate_transfer(
+    state: dict[str, Any], direction: str, observation: Any
+) -> None:
+    for field in (
+        "event_seconds",
+        "wall_seconds",
+        "prepare_seconds",
+        "submit_seconds",
+        "wait_seconds",
+        "finish_seconds",
+    ):
+        key = f"{direction}_{field}_total"
+        state[key] = float(state[key]) + float(getattr(observation, field))
+
+
+def _trace_access(
+    *,
+    layer_name: str,
+    first_pos: int,
+    subbatch_start: int,
+    query_rows: int,
+    history_pages: list[int],
+    missing_pages: list[int],
+    victim_pages: list[int],
+    assigned_slots: list[int],
+    assigned_generations: list[int],
+) -> tuple[bool, bool, int]:
+    path = os.environ.get("VLLM_QWEN_KVMEM_Q2E_TRACE_PATH")
+    if not path:
+        return False, False, 0
+    from vllm_exl3.kvmem_q2e_trace import write_trace_record
+
+    result = write_trace_record(
+        path,
+        int(os.environ.get("VLLM_QWEN_KVMEM_Q2E_TRACE_MAX_BYTES", 268435456)),
+        layer_id=_layer_id(layer_name),
+        first_pos=first_pos,
+        subbatch_start=subbatch_start,
+        query_rows=query_rows,
+        history_pages=history_pages,
+        missing_pages=missing_pages,
+        victim_pages=victim_pages,
+        assigned_slots=assigned_slots,
+        assigned_generations=assigned_generations,
+    )
+    return (
+        bool(result["written"]),
+        bool(result["truncated"]),
+        int(result["record_bytes"]),
+    )
+
+
+def _reset_trace_after_warmup_once() -> None:
+    """Discard warmup records before the one frozen qualification request."""
+    raw_path = os.environ.get("VLLM_QWEN_KVMEM_Q2E_TRACE_PATH")
+    if not raw_path:
+        return
+    path = Path(raw_path).expanduser().resolve(strict=False)
+    if path in _TRACE_RESET_PATHS:
+        return
+    from vllm_exl3.kvmem_q2e_trace import close_trace_writers
+
+    close_trace_writers()
+    path.unlink(missing_ok=True)
+    _TRACE_RESET_PATHS.add(path)
 
 
 def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
@@ -39,10 +119,23 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         lineage=f"q2d-runtime:{layer.layer_name}",
     )
     read_pages = int(plan["read_cache_page_count"])
+    timing_totals = {
+        f"{direction}_{field}_total": 0.0
+        for direction in ("d2h", "h2d")
+        for field in (
+            "event_seconds",
+            "wall_seconds",
+            "prepare_seconds",
+            "submit_seconds",
+            "wait_seconds",
+            "finish_seconds",
+        )
+    }
     state = {
         "backing": backing,
         "logical_to_slot": {},
         "slot_to_logical": [None] * read_pages,
+        "slot_generations": [0] * read_pages,
         "last_use": {},
         "clock": 0,
         "peak_slots": 0,
@@ -56,8 +149,35 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "h2d_jobs": 0,
         "roundtrip_pages": 0,
         "roundtrip_exact": True,
+        "trace_records": 0,
+        "trace_bytes": 0,
+        "trace_truncated": False,
+        "trace_wall_seconds_total": 0.0,
+        "d2d_copy_submit_seconds_total": 0.0,
+        **timing_totals,
     }
     layer._q2d_streaming_state = state
+    dedicated = layer.kv_cache
+    page_bytes = int(staging[0].numel() * staging.element_size())
+    _write_event({
+        "event": "q2e_memory_census",
+        "layer": layer.layer_name,
+        "layer_id": _layer_id(layer.layer_name),
+        "page_bytes": page_bytes,
+        "addressable_pages": int(plan["physical_page_count"]),
+        "write_pages": int(plan["write_page_count"]),
+        "read_pages": read_pages,
+        "null_pages": int(dedicated.shape[0]) - int(plan["physical_page_count"]),
+        "dedicated_tensor_bytes": int(dedicated.numel() * dedicated.element_size()),
+        "staging_pages": int(staging.shape[0]),
+        "staging_tensor_bytes": int(staging.numel() * staging.element_size()),
+        "cpu_backing_pages": int(plan["cpu_page_count"]),
+        "cpu_backing_logical_bytes": int(plan["cpu_page_count"]) * page_bytes,
+        "dynamic_table_bytes": int(plan["cpu_page_count"]) * 4,
+        "cuda_memory_allocated_bytes": int(torch.cuda.memory_allocated()),
+        "cuda_memory_reserved_bytes": int(torch.cuda.memory_reserved()),
+        "cuda_max_memory_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+    })
     return state
 
 
@@ -137,6 +257,7 @@ def _publish_completed(
         obs = state["backing"].publish(chunk, list(range(n)))
         state["d2h_bytes"] += int(obs.transfer_bytes)
         state["d2h_jobs"] += int(obs.job_id != 0)
+        _accumulate_transfer(state, "d2h", obs)
 
         # Every page is immediately round-tripped while its scheduler-owned
         # WRITE source is still intact. After this exact check the CPU copy is
@@ -144,21 +265,60 @@ def _publish_completed(
         restore = state["backing"].stage_in(chunk, list(range(n)))
         state["h2d_bytes"] += int(restore.transfer_bytes)
         state["h2d_jobs"] += int(restore.job_id != 0)
+        _accumulate_transfer(state, "h2d", restore)
         exact = _bits_equal(staging[:n], source)
         state["roundtrip_pages"] += n
         state["roundtrip_exact"] = bool(state["roundtrip_exact"] and exact)
         if not exact:
             raise RuntimeError("Q2D CPU publication roundtrip differs from WRITE source")
 
+        before_slots = list(state["slot_to_logical"])
+        before_pages = set(state["logical_to_slot"])
         local_slots = _assign_many(state, chunk, set(chunk))
+        new_pages: list[int] = []
+        new_slots: list[int] = []
+        new_generations: list[int] = []
+        victims: list[int] = []
+        for page, slot in zip(chunk, local_slots, strict=True):
+            if page in before_pages:
+                continue
+            previous = before_slots[slot]
+            state["slot_generations"][slot] += 1
+            if previous is not None:
+                victims.append(int(previous))
+            new_pages.append(int(page))
+            new_slots.append(int(slot))
+            new_generations.append(int(state["slot_generations"][slot]))
         read_ids = torch.tensor(
             [read_base + slot for slot in local_slots],
             dtype=torch.int64,
             device=kv_cache.device,
         )
+        copy_start = time.perf_counter()
         kv_cache.index_copy_(0, read_ids, staging[:n])
+        state["d2d_copy_submit_seconds_total"] += (
+            time.perf_counter() - copy_start
+        )
         _touch(state, chunk)
         state["published"].update(chunk)
+        trace_start = time.perf_counter()
+        written, truncated, record_bytes = _trace_access(
+            layer_name=layer.layer_name,
+            first_pos=int(positions.min().item()),
+            subbatch_start=0,
+            query_rows=0,
+            history_pages=[],
+            missing_pages=new_pages,
+            victim_pages=victims,
+            assigned_slots=new_slots,
+            assigned_generations=new_generations,
+        )
+        state["trace_records"] += int(written)
+        state["trace_bytes"] += record_bytes if written else 0
+        state["trace_truncated"] = bool(state["trace_truncated"] or truncated)
+        state["trace_wall_seconds_total"] = float(
+            state.get("trace_wall_seconds_total", 0.0)
+        ) + (time.perf_counter() - trace_start)
     state["next_publish_page"] = completed
     state["peak_read_slots"] = max(
         int(state["peak_read_slots"]), len(state["logical_to_slot"])
@@ -174,12 +334,22 @@ def _stage_history(
     plan: dict[str, Any],
     history_pages: list[int],
     kv_cache: torch.Tensor,
-) -> int:
+) -> tuple[int, list[int], list[int], list[int], list[int]]:
     missing = [page for page in history_pages if page not in state["logical_to_slot"]]
     absent = [page for page in missing if page not in state["published"]]
     if absent:
         raise RuntimeError(f"Q2D selected history is not CPU-authoritative: {absent[:8]}")
+    before_slots = list(state["slot_to_logical"])
     local_slots = _assign_many(state, missing, set(history_pages))
+    generations: list[int] = []
+    victims: list[int] = []
+    for page, slot in zip(missing, local_slots, strict=True):
+        previous = before_slots[slot]
+        if previous != page:
+            state["slot_generations"][slot] += 1
+            if previous is not None:
+                victims.append(int(previous))
+        generations.append(int(state["slot_generations"][slot]))
     staging = layer._q2d_staging
     chunk_size = int(staging.shape[0])
     read_base = int(plan["write_page_count"])
@@ -190,17 +360,22 @@ def _stage_history(
         obs = state["backing"].stage_in(pages, list(range(n)))
         state["h2d_bytes"] += int(obs.transfer_bytes)
         state["h2d_jobs"] += int(obs.job_id != 0)
+        _accumulate_transfer(state, "h2d", obs)
         read_ids = torch.tensor(
             [read_base + slot for slot in slots],
             dtype=torch.int64,
             device=kv_cache.device,
         )
+        copy_start = time.perf_counter()
         kv_cache.index_copy_(0, read_ids, staging[:n])
+        state["d2d_copy_submit_seconds_total"] += (
+            time.perf_counter() - copy_start
+        )
     _touch(state, history_pages)
     state["peak_read_slots"] = max(
         int(state["peak_read_slots"]), len(state["logical_to_slot"])
     )
-    return len(missing)
+    return len(missing), missing, victims, local_slots, generations
 
 
 def run_streaming_runtime(
@@ -222,21 +397,47 @@ def run_streaming_runtime(
     if num_tokens <= 0:
         output.zero_()
         return
+    forward_start = time.perf_counter()
     pos = positions.to(device=selected.device, dtype=torch.int64).reshape(-1)
     if pos.numel() != num_tokens:
         raise RuntimeError("Q2D position count mismatch")
     state = _state(layer, plan)
     if int(pos.min().item()) == 0 and bool(state["saw_forward"]):
+        _reset_trace_after_warmup_once()
         state = _new_state(layer, plan)
     state["saw_forward"] = True
+    cumulative_timing_fields = tuple(
+        [
+            f"{direction}_{field}_total"
+            for direction in ("d2h", "h2d")
+            for field in (
+                "event_seconds",
+                "wall_seconds",
+                "prepare_seconds",
+                "submit_seconds",
+                "wait_seconds",
+                "finish_seconds",
+            )
+        ]
+        + ["d2d_copy_submit_seconds_total", "trace_wall_seconds_total"]
+    )
+    timing_before = {
+        field: float(state[field]) for field in cumulative_timing_fields
+    }
+    mapping_start = time.perf_counter()
     current_pages, current_write_ids = _validate_write_mapping(plan, pos, main_metadata)
+    write_mapping_wall = time.perf_counter() - mapping_start
 
+    kv_update_start = time.perf_counter()
     impl.do_kv_cache_update(
         layer, key, value, layer.kv_cache, main_metadata.slot_mapping
     )
+    kv_update_submit_wall = time.perf_counter() - kv_update_start
+    publish_start = time.perf_counter()
     published = _publish_completed(
         layer, state, plan, pos, layer.kv_cache, main_metadata.block_table
     )
+    publish_wall = time.perf_counter() - publish_start
 
     from vllm.models.qwen4_exp.nvidia.ops.qsa import qsa_sparse_paged_attention
     from vllm.utils.torch_utils import canonicalize_singleton_dim_strides
@@ -260,7 +461,12 @@ def run_streaming_runtime(
     max_working = 0
     misses_total = 0
     selected_history_total = 0
+    selection_plan_wall = 0.0
+    stage_history_wall = 0.0
+    table_build_wall = 0.0
+    attention_submit_wall = 0.0
     while start < num_tokens:
+        plan_start = time.perf_counter()
         size = min(batch_target, num_tokens - start)
         while True:
             end = start + size
@@ -284,9 +490,29 @@ def run_streaming_runtime(
                     f"working={working} above partition/cap"
                 )
             size = max(1, size // 2)
-        misses = _stage_history(
+        selection_plan_wall += time.perf_counter() - plan_start
+        stage_start = time.perf_counter()
+        misses, missing, victims, assigned_slots, assigned_generations = _stage_history(
             layer, state, plan, history_pages, layer.kv_cache
         )
+        stage_history_wall += time.perf_counter() - stage_start
+        trace_start = time.perf_counter()
+        written, truncated, record_bytes = _trace_access(
+            layer_name=layer.layer_name,
+            first_pos=int(pos.min().item()),
+            subbatch_start=start,
+            query_rows=size,
+            history_pages=history_pages,
+            missing_pages=missing,
+            victim_pages=victims,
+            assigned_slots=assigned_slots,
+            assigned_generations=assigned_generations,
+        )
+        state["trace_records"] += int(written)
+        state["trace_bytes"] += record_bytes if written else 0
+        state["trace_truncated"] = bool(state["trace_truncated"] or truncated)
+        state["trace_wall_seconds_total"] += time.perf_counter() - trace_start
+        table_start = time.perf_counter()
         table = torch.full(
             (1, int(plan["cpu_page_count"])),
             -1,
@@ -305,7 +531,9 @@ def run_streaming_runtime(
             torch.tensor(mapped_pages, dtype=torch.int64, device=table.device),
             torch.tensor(physical, dtype=table.dtype, device=table.device),
         )
+        table_build_wall += time.perf_counter() - table_start
         end = start + size
+        attention_start = time.perf_counter()
         qsa_sparse_paged_attention(
             query[start:end],
             key_cache,
@@ -315,6 +543,7 @@ def run_streaming_runtime(
             request_ids[start:end],
             output[start:end],
         )
+        attention_submit_wall += time.perf_counter() - attention_start
         split_calls += 1
         min_batch = min(min_batch, size)
         max_working = max(max_working, working)
@@ -328,6 +557,10 @@ def run_streaming_runtime(
     real_pages = int(plan["write_page_count"]) + len(state["logical_to_slot"])
     if real_pages > cap:
         raise RuntimeError("Q2D combined READ/WRITE ownership exceeds physical cap")
+    timing_delta = {
+        field.removesuffix("_total"): float(state[field]) - timing_before[field]
+        for field in cumulative_timing_fields
+    }
     _write_event({
         "event": "q2d_streaming_runtime",
         "layer": layer.layer_name,
@@ -352,6 +585,18 @@ def run_streaming_runtime(
         "d2h_jobs_total": int(state["d2h_jobs"]),
         "h2d_bytes_total": int(state["h2d_bytes"]),
         "h2d_jobs_total": int(state["h2d_jobs"]),
+        "forward_exposed_wall_seconds": time.perf_counter() - forward_start,
+        "write_mapping_wall_seconds": write_mapping_wall,
+        "kv_update_submit_wall_seconds": kv_update_submit_wall,
+        "publish_wall_seconds": publish_wall,
+        "selection_plan_wall_seconds": selection_plan_wall,
+        "stage_history_wall_seconds": stage_history_wall,
+        "table_build_wall_seconds": table_build_wall,
+        "attention_submit_wall_seconds": attention_submit_wall,
+        **timing_delta,
+        "trace_records_total": int(state["trace_records"]),
+        "trace_bytes_total": int(state["trace_bytes"]),
+        "trace_truncated": bool(state["trace_truncated"]),
         "read_table_mode": "dynamic_cpu_history_plus_scheduler_writes",
         "write_partition": [0, read_base - 1],
         "read_partition": [read_base, cap - 1],

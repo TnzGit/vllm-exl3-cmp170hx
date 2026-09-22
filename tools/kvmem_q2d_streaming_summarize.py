@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ def summarize(
     worker_rows: list[dict[str, Any]],
     scheduler_rows: list[dict[str, Any]],
     plan: dict[str, Any],
+    trace_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     prompt_tokens = int(plan["query_span"][1])
     chunk_tokens = int(plan["scheduler_chunk_tokens"])
@@ -79,9 +81,43 @@ def summarize(
         "read_table_mode",
         "write_partition",
         "read_partition",
+        "forward_exposed_wall_seconds",
+        "write_mapping_wall_seconds",
+        "kv_update_submit_wall_seconds",
+        "publish_wall_seconds",
+        "selection_plan_wall_seconds",
+        "stage_history_wall_seconds",
+        "table_build_wall_seconds",
+        "attention_submit_wall_seconds",
+        "d2h_event_seconds",
+        "d2h_wall_seconds",
+        "d2h_prepare_seconds",
+        "d2h_submit_seconds",
+        "d2h_wait_seconds",
+        "d2h_finish_seconds",
+        "h2d_event_seconds",
+        "h2d_wall_seconds",
+        "h2d_prepare_seconds",
+        "h2d_submit_seconds",
+        "h2d_wait_seconds",
+        "h2d_finish_seconds",
+        "d2d_copy_submit_seconds",
+        "trace_wall_seconds",
+        "trace_records_total",
+        "trace_bytes_total",
+        "trace_truncated",
     )
     fields_gate = bool(events) and all(
         all(field in row for field in required) for row in events
+    )
+    timing_fields = tuple(field for field in required if field.endswith("_seconds"))
+    timing_gate = bool(
+        fields_gate
+        and all(
+            math.isfinite(float(row[field])) and float(row[field]) >= 0.0
+            for row in events
+            for field in timing_fields
+        )
     )
     capacity_gate = bool(
         fields_gate
@@ -149,19 +185,92 @@ def summarize(
         and sum(int(row.get("freed_pages", 0)) for row in reclaims)
         >= expected_published
     )
+    memory_rows = [
+        row for row in worker_rows if row.get("event") == "q2e_memory_census"
+    ]
+    memory_counts = Counter(str(row.get("layer")) for row in memory_rows)
+    memory_gate = bool(
+        len(memory_rows) == expected_layers
+        and set(memory_counts) == set(layers)
+        and all(count == 1 for count in memory_counts.values())
+        and all(
+            int(row.get("page_bytes", 0)) == 32768
+            and int(row.get("addressable_pages", 0)) == cap
+            and int(row.get("write_pages", 0)) == write_cap
+            and int(row.get("read_pages", 0)) == read_cap
+            and int(row.get("null_pages", 0)) == 1
+            and int(row.get("staging_pages", 0)) == int(plan["staging_pages"])
+            and int(row.get("cpu_backing_pages", 0)) == int(plan["cpu_page_count"])
+            and int(row.get("dedicated_tensor_bytes", 0))
+            == (cap + 1) * 32768
+            and int(row.get("staging_tensor_bytes", 0))
+            == int(plan["staging_pages"]) * 32768
+            and int(row.get("cpu_backing_logical_bytes", 0))
+            == int(plan["cpu_page_count"]) * 32768
+            and int(row.get("dynamic_table_bytes", 0))
+            == int(plan["cpu_page_count"]) * 4
+            for row in memory_rows
+        )
+    )
+    expected_trace_records = sum(int(row["split_calls"]) for row in events) + sum(
+        (int(row["published_pages_this_forward"]) + int(plan["staging_pages"]) - 1)
+        // int(plan["staging_pages"])
+        for row in events
+    )
+    expected_trace_history_pages = sum(
+        int(row["selected_history_pages"]) for row in events
+    )
+    expected_trace_missing_pages = sum(
+        int(row["reload_miss_pages"]) + int(row["published_pages_this_forward"])
+        for row in events
+    )
+    expected_trace_by_layer = {
+        str(next(
+            row["layer_id"] for row in memory_rows if str(row["layer"]) == layer
+        )): sum(
+            int(row["split_calls"])
+            + (
+                int(row["published_pages_this_forward"])
+                + int(plan["staging_pages"])
+                - 1
+            ) // int(plan["staging_pages"])
+            for row in events
+            if str(row["layer"]) == layer
+        )
+        for layer in layers
+    } if memory_gate else {}
+    trace_gate = trace_summary is None or bool(
+        trace_summary.get("complete")
+        and not trace_summary.get("truncated")
+        and int(trace_summary.get("records", -1)) == expected_trace_records
+        and int(trace_summary.get("history_pages", -1))
+        == expected_trace_history_pages
+        and int(trace_summary.get("missing_pages", -1))
+        == expected_trace_missing_pages
+        and int(trace_summary.get("assigned_slots", -1))
+        == expected_trace_missing_pages
+        and int(trace_summary.get("max_query_rows", -1))
+        <= int(plan["query_row_batch"])
+        and int(trace_summary.get("max_history_pages", -1)) <= read_cap
+        and trace_summary.get("per_layer_records") == expected_trace_by_layer
+    )
     semantic_gate = bool(
         response.get("target_codes_in_order")
         and response.get("finish_reason") == "stop"
         and int(response.get("usage", {}).get("prompt_tokens", -1)) == prompt_tokens
     )
     evidence_gate = bool(
-        coverage_gate and fields_gate and capacity_gate and mapping_gate
-        and cpu_gate and publication_gate and scheduler_gate
+        coverage_gate and fields_gate and timing_gate and capacity_gate and mapping_gate
+        and cpu_gate and publication_gate and scheduler_gate and memory_gate
+        and trace_gate
     )
     go = bool(evidence_gate and semantic_gate)
     if go:
         classification = "Q2D_CPU_AUTHORITATIVE_STREAMING_SEMANTIC_GO"
-    elif not coverage_gate or not fields_gate:
+    elif (
+        not coverage_gate or not fields_gate or not timing_gate
+        or not memory_gate or not trace_gate
+    ):
         classification = "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
     elif not scheduler_gate or not capacity_gate:
         classification = "Q2D_STREAMING_OWNERSHIP_NO_GO"
@@ -179,11 +288,15 @@ def summarize(
         "semantic_gate": semantic_gate,
         "coverage_gate": coverage_gate,
         "fields_gate": fields_gate,
+        "timing_gate": timing_gate,
         "capacity_gate": capacity_gate,
         "mapping_gate": mapping_gate,
         "cpu_authority_gate": cpu_gate,
         "publication_gate": publication_gate,
         "scheduler_gate": scheduler_gate,
+        "memory_census_gate": memory_gate,
+        "trace_gate": trace_gate,
+        "trace_enabled": trace_summary is not None,
         "records": len(prefill),
         "all_worker_events": len(events),
         "expected_records": expected_layers * len(expected_spans),
@@ -246,6 +359,38 @@ def summarize(
         "h2d_jobs": sum(
             int(row.get("h2d_jobs_total", 0)) for row in final_by_layer.values()
         ),
+        "timing_all_events_seconds": {
+            field: sum(float(row[field]) for row in events)
+            for field in timing_fields
+        },
+        "timing_prefill_seconds": {
+            field: sum(float(row[field]) for row in prefill)
+            for field in timing_fields
+        },
+        "memory_census": {
+            "layers": len(memory_rows),
+            "dedicated_tensor_bytes": sum(
+                int(row.get("dedicated_tensor_bytes", 0)) for row in memory_rows
+            ),
+            "staging_tensor_bytes": sum(
+                int(row.get("staging_tensor_bytes", 0)) for row in memory_rows
+            ),
+            "cpu_backing_logical_bytes": sum(
+                int(row.get("cpu_backing_logical_bytes", 0)) for row in memory_rows
+            ),
+            "max_cuda_memory_allocated_bytes": max(
+                (int(row.get("cuda_memory_allocated_bytes", 0)) for row in memory_rows),
+                default=0,
+            ),
+            "max_cuda_memory_reserved_bytes": max(
+                (int(row.get("cuda_memory_reserved_bytes", 0)) for row in memory_rows),
+                default=0,
+            ),
+        },
+        "trace_expected_records": expected_trace_records,
+        "trace_expected_history_pages": expected_trace_history_pages,
+        "trace_expected_missing_pages": expected_trace_missing_pages,
+        "trace_summary": trace_summary,
     }
 
 
@@ -256,12 +401,14 @@ def main() -> int:
     ap.add_argument("--scheduler-stats", type=Path, required=True)
     ap.add_argument("--plan", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--trace-summary", type=Path)
     args = ap.parse_args()
     result = summarize(
         json.loads(args.response.read_text()),
         load_jsonl(args.worker_stats),
         load_jsonl(args.scheduler_stats),
         json.loads(args.plan.read_text()),
+        json.loads(args.trace_summary.read_text()) if args.trace_summary else None,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))
