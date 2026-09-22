@@ -60,6 +60,7 @@ def summarize(
     expected_io_mode: str = "staged_copy",
     expected_trace_sha256: str | None = None,
     expected_scheduler_digest: str | None = None,
+    require_dynamic_table_oracle: bool = False,
 ) -> dict[str, Any]:
     if expected_io_mode not in ("staged_copy", "direct_dedicated_slots"):
         raise ValueError(f"unsupported expected_io_mode: {expected_io_mode}")
@@ -219,6 +220,18 @@ def summarize(
             for row in final_by_layer.values()
         )
     )
+    dynamic_table_oracle_gate = bool(
+        not require_dynamic_table_oracle
+        or (
+            len(final_by_layer) == expected_layers
+            and all(
+                bool(row.get("dynamic_table_oracle_enabled"))
+                and int(row.get("dynamic_table_oracle_checks_total", 0)) > 0
+                and int(row.get("dynamic_table_oracle_pages_total", 0)) > 0
+                for row in final_by_layer.values()
+            )
+        )
+    )
     assignments = [
         row for row in scheduler_rows if row.get("event") == "q2d_scheduler_assign"
     ]
@@ -373,7 +386,7 @@ def summarize(
         coverage_gate and fields_gate and timing_gate and io_mode_gate
         and capacity_gate and mapping_gate
         and cpu_gate and publication_gate and scheduler_gate and memory_gate
-        and trace_gate and paired_policy_gate
+        and trace_gate and paired_policy_gate and dynamic_table_oracle_gate
     )
     go = bool(evidence_gate and semantic_gate)
     if go:
@@ -381,6 +394,7 @@ def summarize(
     elif (
         not coverage_gate or not fields_gate or not timing_gate or not io_mode_gate
         or not memory_gate or not trace_gate or not paired_policy_gate
+        or not dynamic_table_oracle_gate
     ):
         classification = "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
     elif not scheduler_gate or not capacity_gate:
@@ -406,6 +420,8 @@ def summarize(
         "mapping_gate": mapping_gate,
         "cpu_authority_gate": cpu_gate,
         "publication_gate": publication_gate,
+        "dynamic_table_oracle_gate": dynamic_table_oracle_gate,
+        "dynamic_table_oracle_required": require_dynamic_table_oracle,
         "scheduler_gate": scheduler_gate,
         "memory_census_gate": memory_gate,
         "trace_gate": trace_gate,
@@ -455,6 +471,20 @@ def summarize(
         "min_final_direct_consumer_syncs_per_layer": min(
             (
                 int(row["direct_consumer_syncs_total"])
+                for row in final_by_layer.values()
+            ),
+            default=0,
+        ),
+        "min_final_dynamic_table_oracle_checks_per_layer": min(
+            (
+                int(row.get("dynamic_table_oracle_checks_total", 0))
+                for row in final_by_layer.values()
+            ),
+            default=0,
+        ),
+        "min_final_dynamic_table_oracle_pages_per_layer": min(
+            (
+                int(row.get("dynamic_table_oracle_pages_total", 0))
                 for row in final_by_layer.values()
             ),
             default=0,
@@ -544,6 +574,7 @@ def main() -> int:
     )
     ap.add_argument("--expected-trace-sha256")
     ap.add_argument("--expected-scheduler-digest")
+    ap.add_argument("--require-dynamic-table-oracle", action="store_true")
     args = ap.parse_args()
     result = summarize(
         json.loads(args.response.read_text()),
@@ -554,6 +585,7 @@ def main() -> int:
         args.expected_io_mode,
         args.expected_trace_sha256,
         args.expected_scheduler_digest,
+        args.require_dynamic_table_oracle,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))

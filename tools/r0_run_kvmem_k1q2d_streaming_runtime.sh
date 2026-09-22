@@ -23,6 +23,7 @@ Q2E_EXPECTED_TRACE_SHA256="${K1Q2E_EXPECTED_TRACE_SHA256:-}"
 Q2E_EXPECTED_SCHEDULER_DIGEST="${K1Q2E_EXPECTED_SCHEDULER_DIGEST:-}"
 Q2E_VERIFY_MAX_LOGICAL_PAGE="${K1Q2E_VERIFY_MAX_LOGICAL_PAGE:--1}"
 Q2E_DIRECT_CONSUMER_SYNC="${K1Q2E_DIRECT_CONSUMER_SYNC:-1}"
+Q2E_VERIFY_DYNAMIC_TABLE="${K1Q2E_VERIFY_DYNAMIC_TABLE:-0}"
 if [[ "$GPU_MEM_UTIL" != "0.92" || "$MAXLEN" != "161000" || "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2D requires gpu=0.92 maxlen=161000 chunk=1024" >&2
   exit 2
@@ -33,6 +34,10 @@ if [[ "$Q2E_PROFILE" != "0" && "$Q2E_PROFILE" != "1" ]]; then
 fi
 if [[ "$Q2E_DIRECT_IO" != "0" && "$Q2E_DIRECT_IO" != "1" ]]; then
   echo "REFUSE: K1Q2E_DIRECT_IO must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$Q2E_VERIFY_DYNAMIC_TABLE" != "0" && "$Q2E_VERIFY_DYNAMIC_TABLE" != "1" ]]; then
+  echo "REFUSE: K1Q2E_VERIFY_DYNAMIC_TABLE must be 0 or 1" >&2
   exit 2
 fi
 if [[ "$Q2E_DIRECT_IO" == "1" && "$Q2E_PROFILE" != "1" ]]; then
@@ -273,10 +278,12 @@ if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
   export VLLM_QWEN_KVMEM_Q2E_DIRECT_IO=1
   export VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE="$Q2E_VERIFY_MAX_LOGICAL_PAGE"
   export VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC=1
+  export VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE="$Q2E_VERIFY_DYNAMIC_TABLE"
 else
   unset VLLM_QWEN_KVMEM_Q2E_DIRECT_IO
   unset VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE
   unset VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC
+  unset VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE
 fi
 PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
 VLLM_QWEN_KVMEM_Q2D_RUNTIME_PLAN="$PLAN" \
@@ -311,6 +318,7 @@ test -s "$SCHED_STATS"
 TRACE_ARGS=()
 IO_ARGS=(--expected-io-mode staged_copy)
 POLICY_ARGS=()
+ORACLE_ARGS=()
 if [[ "$Q2E_PROFILE" == "1" ]]; then
   test -s "$TRACE"
   PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
@@ -325,6 +333,9 @@ if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
     --expected-scheduler-digest "$Q2E_EXPECTED_SCHEDULER_DIGEST"
   )
 fi
+if [[ "$Q2E_VERIFY_DYNAMIC_TABLE" == "1" ]]; then
+  ORACLE_ARGS=(--require-dynamic-table-oracle)
+fi
 
 echo "=== summarize ==="
 set +e
@@ -335,6 +346,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "${TRACE_ARGS[@]}" \
   "${IO_ARGS[@]}" \
   "${POLICY_ARGS[@]}" \
+  "${ORACLE_ARGS[@]}" \
   | tee "$OUT/q2d_streaming_summary.stdout.json"
 SUMMARY_RC=$?
 set -e

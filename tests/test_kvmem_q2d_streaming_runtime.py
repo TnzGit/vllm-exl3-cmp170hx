@@ -14,11 +14,13 @@ from vllm_exl3.kvmem_q2d_streaming_worker import (
     _CUMULATIVE_TIMING_FIELDS,
     _bits_equal,
     _direct_io_enabled,
+    _dynamic_table_oracle_enabled,
     _layer_id,
     _logical_write_ids,
     _prepare_forward_table,
     _stage_history,
     _update_dynamic_table,
+    _verify_dynamic_table,
 )
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
 from vllm_exl3.kvmem_vllm_offload import TransferObservation
@@ -176,6 +178,26 @@ def test_persistent_dynamic_table_applies_deltas_and_forward_write_view():
     assert table[0, [1, 4, 6, 7]].tolist() == [135, -1, 11, 12]
     assert state["current_write_pages"] == [6, 7]
 
+    verified = _verify_dynamic_table(
+        table,
+        history_pages=[1, 5],
+        current_pages=[6, 7],
+        current_map={6: 11, 7: 12},
+        logical_to_slot={1: 7, 5: 5},
+        read_base=128,
+    )
+    assert verified == 4
+    table[0, 5] = 999
+    with pytest.raises(RuntimeError, match="differs from exact mapping"):
+        _verify_dynamic_table(
+            table,
+            history_pages=[1, 5],
+            current_pages=[6, 7],
+            current_map={6: 11, 7: 12},
+            logical_to_slot={1: 7, 5: 5},
+            read_base=128,
+        )
+
 
 def test_direct_io_flag_is_strict(monkeypatch):
     assert "direct_consumer_sync_seconds_total" in _CUMULATIVE_TIMING_FIELDS
@@ -186,6 +208,12 @@ def test_direct_io_flag_is_strict(monkeypatch):
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", "yes")
     with pytest.raises(RuntimeError, match="must be 0 or 1"):
         _direct_io_enabled()
+    monkeypatch.delenv(
+        "VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE", raising=False
+    )
+    assert _dynamic_table_oracle_enabled() is False
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE", "1")
+    assert _dynamic_table_oracle_enabled() is True
 
 
 def test_direct_stage_history_uses_one_arbitrary_destination_job():

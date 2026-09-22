@@ -273,6 +273,25 @@ def test_scheduler_policy_digest_excludes_completion_length():
     assert result["scheduler_prefill_boundary_gate"] is True
 
 
+def test_streaming_summary_can_require_dynamic_table_oracle():
+    result = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan(),
+        require_dynamic_table_oracle=True,
+    )
+    assert result["dynamic_table_oracle_gate"] is False
+    rows = _rows()
+    for row in rows:
+        if row.get("event") == "q2d_streaming_runtime":
+            row["dynamic_table_oracle_enabled"] = True
+            row["dynamic_table_oracle_checks_total"] = 1
+            row["dynamic_table_oracle_pages_total"] = 1
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(),
+        require_dynamic_table_oracle=True,
+    )
+    assert result["dynamic_table_oracle_gate"] is True
+
+
 def test_streaming_summary_gates_expected_direct_io_mode():
     rows = _rows()
     for row in rows:

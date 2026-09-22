@@ -120,6 +120,15 @@ def _direct_io_enabled() -> bool:
     return raw == "1"
 
 
+def _dynamic_table_oracle_enabled() -> bool:
+    raw = os.environ.get("VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE", "0")
+    if raw not in ("0", "1"):
+        raise RuntimeError(
+            "VLLM_QWEN_KVMEM_Q2E_VERIFY_DYNAMIC_TABLE must be 0 or 1"
+        )
+    return raw == "1"
+
+
 def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
     old = getattr(layer, "_q2d_streaming_state", None)
     if old is not None:
@@ -153,6 +162,9 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
             device=dedicated.device,
         ),
         "current_write_pages": [],
+        "verify_dynamic_table": _dynamic_table_oracle_enabled(),
+        "dynamic_table_oracle_checks": 0,
+        "dynamic_table_oracle_pages": 0,
         "last_use": {},
         "clock": 0,
         "peak_slots": 0,
@@ -270,6 +282,30 @@ def _prepare_forward_table(
     )
     state["current_write_pages"] = [int(page) for page in current_pages]
     return state["dynamic_table"]
+
+
+def _verify_dynamic_table(
+    table: torch.Tensor,
+    history_pages: Sequence[int],
+    current_pages: Sequence[int],
+    current_map: dict[int, int],
+    logical_to_slot: dict[int, int],
+    read_base: int,
+) -> int:
+    """Synchronously prove selected READ and WRITE entries are exact."""
+    mapped_pages = sorted(set(history_pages).union(current_pages))
+    expected = [
+        current_map[page]
+        if page in current_map
+        else read_base + int(logical_to_slot[page])
+        for page in mapped_pages
+    ]
+    logical = torch.tensor(mapped_pages, dtype=torch.int64, device=table.device)
+    actual = table[0].index_select(0, logical)
+    wanted = torch.tensor(expected, dtype=table.dtype, device=table.device)
+    if not torch.equal(actual, wanted):
+        raise RuntimeError("Q2E persistent dynamic table differs from exact mapping")
+    return len(mapped_pages)
 
 
 def _validate_write_mapping(
@@ -635,6 +671,17 @@ def run_streaming_runtime(
         state["trace_bytes"] += record_bytes if written else 0
         state["trace_truncated"] = bool(state["trace_truncated"] or truncated)
         state["trace_wall_seconds_total"] += time.perf_counter() - trace_start
+        if bool(state["verify_dynamic_table"]):
+            verified = _verify_dynamic_table(
+                table,
+                history_pages,
+                current_pages,
+                current_map,
+                state["logical_to_slot"],
+                read_base,
+            )
+            state["dynamic_table_oracle_checks"] += 1
+            state["dynamic_table_oracle_pages"] += verified
         end = start + size
         attention_start = time.perf_counter()
         qsa_sparse_paged_attention(
@@ -694,6 +741,13 @@ def run_streaming_runtime(
             state["direct_consumer_sync_seconds_total"]
         ),
         "direct_consumer_syncs_total": int(state["direct_consumer_syncs"]),
+        "dynamic_table_oracle_enabled": bool(state["verify_dynamic_table"]),
+        "dynamic_table_oracle_checks_total": int(
+            state["dynamic_table_oracle_checks"]
+        ),
+        "dynamic_table_oracle_pages_total": int(
+            state["dynamic_table_oracle_pages"]
+        ),
         "d2h_bytes_total": int(state["d2h_bytes"]),
         "d2h_jobs_total": int(state["d2h_jobs"]),
         "h2d_bytes_total": int(state["h2d_bytes"]),
