@@ -288,6 +288,11 @@ def validate_runtime_plan(plan: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Q2C resident page list mismatch")
     active_page0 = int(plan["active_page0"])
     reserve = int(plan["active_reserve_pages"])
+    chunk_tokens = int(plan.get("scheduler_chunk_tokens", 0))
+    if chunk_tokens != reserve * page_tokens or chunk_tokens != 1024:
+        raise ValueError(
+            "Q2C scheduler chunk must equal the 1024-token active reserve"
+        )
     if any(p < 0 or p >= active_page0 for p in resident):
         raise ValueError("Q2C historical resident pages must precede active suffix")
     if len(resident) + reserve != int(plan["physical_page_count"]):
