@@ -80,6 +80,15 @@ def test_lru_never_evicts_protected_read_or_write_pages():
     assert state["peak_slots"] == 3
 
 
+def test_bulk_touch_preserves_exact_sequential_clock_values():
+    state = _lru_state()
+    _assign_many(state, [10, 11, 12], set())
+    _touch(state, [10, 11, 12])
+    _touch(state, [12, 10])
+    assert state["clock"] == 5
+    assert state["last_use"] == {10: 5, 11: 2, 12: 4}
+
+
 def test_lru_refuses_when_entire_pool_is_protected():
     state = _lru_state(2)
     _assign_slot(state, 1, set())

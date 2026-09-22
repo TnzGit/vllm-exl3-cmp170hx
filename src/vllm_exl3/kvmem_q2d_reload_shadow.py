@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 from pathlib import Path
@@ -161,17 +162,24 @@ def _assign_many(
             if len(free) == len(missing):
                 break
     need_victims = max(0, len(missing) - len(free))
-    victims = (
-        sorted(
-            (
-                int(logical) for logical in state["logical_to_slot"]
-                if int(logical) not in protected
-            ),
-            key=lambda logical: state["last_use"].get(logical, -1),
-        )[:need_victims]
-        if need_victims
-        else []
-    )
+    if need_victims:
+        candidates = [
+            int(logical) for logical in state["logical_to_slot"]
+            if int(logical) not in protected
+        ]
+        if need_victims < len(candidates):
+            victims = heapq.nsmallest(
+                need_victims,
+                candidates,
+                key=lambda logical: state["last_use"].get(logical, -1),
+            )
+        else:
+            victims = sorted(
+                candidates,
+                key=lambda logical: state["last_use"].get(logical, -1),
+            )
+    else:
+        victims = []
     if len(free) + len(victims) < len(missing):
         raise RuntimeError("Q2D reload pool has insufficient evictable slots")
     available = list(free)
@@ -190,9 +198,14 @@ def _assign_many(
 
 
 def _touch(state: dict[str, Any], pages: Sequence[int]) -> None:
-    for page in pages:
-        state["clock"] += 1
-        state["last_use"][int(page)] = int(state["clock"])
+    count = len(pages)
+    if not count:
+        return
+    first = int(state["clock"]) + 1
+    state["last_use"].update(
+        zip((int(page) for page in pages), range(first, first + count), strict=True)
+    )
+    state["clock"] = first + count - 1
 
 
 def _publish_completed(
