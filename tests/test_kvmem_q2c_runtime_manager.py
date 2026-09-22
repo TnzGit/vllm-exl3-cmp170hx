@@ -224,3 +224,36 @@ def test_append_only_worker_ids_keep_logical_alignment_under_virtual_reuse():
     assert any(b.is_null for b in scheduler_blocks)
     assert all(0 <= x < 4160 for x in worker_ids)
     assert len(set(worker_ids)) <= 4160
+
+
+def test_variable_mamba_aligned_prefill_chunks_stay_within_virtual_cap():
+    _, _, mgr = _manager()
+    req = "mamba-aligned"
+    worker_ids: list[int] = []
+    processed = 0
+
+    # Emulate a 1024-token budget that is periodically shortened to land on
+    # 1568-token hybrid/Mamba boundaries. 1568 == 98 QSA pages, so every
+    # resulting boundary still lands exactly on a 16-token QSA page.
+    while processed < 160000:
+        mgr.remove_skipped_blocks(req, processed)
+        nominal_end = min(processed + 1024, 160000)
+        next_mamba_boundary = ((processed // 1568) + 1) * 1568
+        target = min(nominal_end, next_mamba_boundary)
+        if target <= processed:
+            target = nominal_end
+        assert target % 16 == 0
+
+        fresh = mgr.allocate_new_blocks(req, target, target)
+        worker_ids.extend(int(b.block_id) for b in fresh)
+        assert len(fresh) <= 64
+        assert mgr._real_count(req) <= 4160
+        assert mgr.virtual_free_pages == 4160 - mgr._real_count(req)
+        assert len(worker_ids) == target // 16
+        processed = target
+
+    mgr.remove_skipped_blocks(req, 160000)
+    assert len(worker_ids) == 10000
+    assert mgr._real_count(req) == 4096
+    assert mgr._peak_real_pages[req] <= 4160
+    assert all(0 <= x < 4160 for x in worker_ids)
