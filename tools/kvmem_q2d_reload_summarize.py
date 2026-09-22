@@ -66,6 +66,9 @@ def summarize(
         "stage_compare_exact",
         "attention_allclose",
         "attention_max_abs",
+        "reload_vs_stock_split_exact",
+        "reload_vs_stock_split_allclose",
+        "reload_vs_stock_split_max_abs",
         "d2h_bytes_total",
         "h2d_bytes_total",
     )
@@ -87,6 +90,7 @@ def summarize(
         fields_gate
         and all(
             bool(row["attention_allclose"])
+            and bool(row["reload_vs_stock_split_allclose"])
             and float(row["attention_max_abs"]) >= 0.0
             for row in events
         )
@@ -176,6 +180,23 @@ def summarize(
         ),
         "attention_mismatch_elements": sum(
             int(row.get("attention_mismatch_elements", 0)) for row in events
+        ),
+        "reload_vs_stock_split_exact_gate": bool(
+            fields_gate and all(
+                bool(row["reload_vs_stock_split_exact"]) for row in events
+            )
+        ),
+        "reload_vs_stock_split_mismatch_elements": sum(
+            int(row.get("reload_vs_stock_split_mismatch_elements", 0))
+            for row in events
+        ),
+        "reload_vs_stock_split_max_abs": max(
+            (float(row.get("reload_vs_stock_split_max_abs", 0.0)) for row in events),
+            default=0.0,
+        ),
+        "reload_vs_stock_split_max_mean_abs": max(
+            (float(row.get("reload_vs_stock_split_mean_abs", 0.0)) for row in events),
+            default=0.0,
         ),
         # Counters are cumulative per layer, so aggregate only each layer's
         # final observation rather than summing every event.

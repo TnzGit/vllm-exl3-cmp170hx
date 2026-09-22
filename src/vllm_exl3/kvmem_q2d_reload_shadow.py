@@ -314,6 +314,32 @@ def run_reload_shadow(
     if num_tokens <= 0:
         return
     reference = output[:num_tokens].clone()
+    from vllm.models.qwen4_exp.nvidia.ops.qsa import qsa_sparse_paged_attention
+    from vllm.utils.torch_utils import canonicalize_singleton_dim_strides
+
+    # A second stock-cache reference uses the exact same 64-row call geometry
+    # as the reload path. Comparing reload against this tensor separates
+    # already-qualified row-split BF16 drift from any extra error introduced
+    # by 16-token cache addressing, CPU reload, or dynamic READ mapping.
+    stock_key, stock_value = layer.kv_cache.transpose(1, 2).split(
+        impl.head_size, dim=-1
+    )
+    stock_key = canonicalize_singleton_dim_strides(stock_key)
+    stock_value = canonicalize_singleton_dim_strides(stock_value)
+    stock_split = torch.zeros_like(output[:num_tokens])
+    batch_target = int(plan["query_row_batch"])
+    request_ids = side_metadata.token_to_req[:num_tokens]
+    for stock_start in range(0, num_tokens, batch_target):
+        stock_end = min(stock_start + batch_target, num_tokens)
+        qsa_sparse_paged_attention(
+            query[stock_start:stock_end],
+            stock_key,
+            stock_value,
+            selected[stock_start:stock_end],
+            main_metadata.block_table,
+            request_ids[stock_start:stock_end],
+            stock_split[stock_start:stock_end],
+        )
     output.zero_()
     pos = positions.to(device=selected.device, dtype=torch.int64).reshape(-1)
     if pos.numel() != num_tokens:
@@ -347,16 +373,11 @@ def run_reload_shadow(
         page_tokens,
     )
 
-    from vllm.models.qwen4_exp.nvidia.ops.qsa import qsa_sparse_paged_attention
-    from vllm.utils.torch_utils import canonicalize_singleton_dim_strides
-
     key_cache, value_cache = reload_cache.transpose(1, 2).split(
         impl.head_size, dim=-1
     )
     key_cache = canonicalize_singleton_dim_strides(key_cache)
     value_cache = canonicalize_singleton_dim_strides(value_cache)
-    request_ids = side_metadata.token_to_req[:num_tokens]
-    batch_target = int(plan["query_row_batch"])
     start = 0
     split_calls = 0
     min_batch = batch_target
@@ -431,10 +452,20 @@ def run_reload_shadow(
 
     actual = output[:num_tokens]
     absolute = (reference.float() - actual.float()).abs()
+    split_absolute = (stock_split.float() - actual.float()).abs()
     exact = bool(torch.equal(reference, actual))
+    split_exact = bool(torch.equal(stock_split, actual))
     allclose = bool(
         torch.allclose(
             reference,
+            actual,
+            atol=float(plan["allclose_atol"]),
+            rtol=float(plan["allclose_rtol"]),
+        )
+    )
+    split_allclose = bool(
+        torch.allclose(
+            stock_split,
             actual,
             atol=float(plan["allclose_atol"]),
             rtol=float(plan["allclose_rtol"]),
@@ -471,6 +502,16 @@ def run_reload_shadow(
         "attention_mean_abs": float(absolute.mean().item()),
         "attention_rmse": float(torch.sqrt((absolute * absolute).mean()).item()),
         "reference_max_abs": float(reference.float().abs().max().item()),
+        "reload_vs_stock_split_exact": split_exact,
+        "reload_vs_stock_split_allclose": split_allclose,
+        "reload_vs_stock_split_mismatch_elements": int(
+            torch.ne(stock_split, actual).sum().item()
+        ),
+        "reload_vs_stock_split_max_abs": float(split_absolute.max().item()),
+        "reload_vs_stock_split_mean_abs": float(split_absolute.mean().item()),
+        "reload_vs_stock_split_rmse": float(
+            torch.sqrt((split_absolute * split_absolute).mean()).item()
+        ),
     })
-    if not allclose:
+    if not allclose or not split_allclose:
         raise RuntimeError("Q2D reload attention exceeds frozen BF16 tolerance")
