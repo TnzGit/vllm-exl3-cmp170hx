@@ -29,16 +29,26 @@ def summarize(
     expected_jobs = (resident_count + staging_pages - 1) // staging_pages
     expected_staging_bytes = staging_pages * page_size
 
-    shrink_rows = [r for r in scheduler_rows if r.get("event") == "q2c_scheduler_shrink"]
+    reclaim_rows = [
+        r for r in scheduler_rows if r.get("event") == "q2c_scheduler_reclaim"
+    ]
+    boundary_rows = [
+        r for r in scheduler_rows if r.get("event") == "q2c_scheduler_boundary"
+    ]
+    reclaimed_pages = sum(int(r.get("freed_pages", 0)) for r in reclaim_rows)
+    peak_real_pages = max(
+        (int(r.get("peak_real_pages", 0)) for r in scheduler_rows),
+        default=0,
+    )
     scheduler_gate = bool(
-        len(shrink_rows) == 1
-        and int(shrink_rows[0]["logical_row_pages"]) > physical_cap
-        and int(shrink_rows[0]["real_pages_before"]) > physical_cap
-        and int(shrink_rows[0]["real_pages_after"]) <= physical_cap
-        and int(shrink_rows[0]["freed_pages"]) > 0
-        and int(shrink_rows[0]["physical_page_cap"]) == physical_cap
-        and int(shrink_rows[0]["resident_history_pages"]) == resident_count
-        and int(shrink_rows[0]["active_reserve_pages"]) == int(plan["active_reserve_pages"])
+        len(boundary_rows) == 1
+        and int(boundary_rows[0]["logical_row_pages"]) > physical_cap
+        and int(boundary_rows[0]["real_pages_at_boundary"]) <= physical_cap
+        and int(boundary_rows[0]["physical_page_cap"]) == physical_cap
+        and int(boundary_rows[0]["resident_history_pages"]) == resident_count
+        and int(boundary_rows[0]["active_reserve_pages"]) == int(plan["active_reserve_pages"])
+        and reclaimed_pages > 0
+        and peak_real_pages <= physical_cap
     )
 
     shrunk_worker = [r for r in worker_rows if r.get("phase") == "shrunk"]
@@ -103,7 +113,7 @@ def summarize(
     else:
         classification = "Q2C_SCHEDULER_OWNERSHIP_SEMANTIC_GO"
 
-    transition = shrink_rows[0] if shrink_rows else {}
+    transition = boundary_rows[0] if boundary_rows else {}
     return {
         "schema": 1,
         "classification": classification,
@@ -127,19 +137,18 @@ def summarize(
             "publication_staging_pages": staging_pages,
         },
         "scheduler": {
-            "events": len(shrink_rows),
-            "logical_row_pages": int(transition.get("logical_row_pages", 0)),
-            "real_pages_before": int(transition.get("real_pages_before", 0)),
-            "real_pages_after": int(transition.get("real_pages_after", 0)),
-            "freed_pages": int(transition.get("freed_pages", 0)),
-            "physical_page_cap": int(transition.get("physical_page_cap", 0)),
-            "shrink_fraction": (
-                1.0
-                - int(transition.get("real_pages_after", 0))
-                / int(transition["real_pages_before"])
-                if int(transition.get("real_pages_before", 0)) > 0
-                else 0.0
+            "reclaim_events": len(reclaim_rows),
+            "boundary_events": len(boundary_rows),
+            "logical_row_pages_at_boundary": int(
+                transition.get("logical_row_pages", 0)
             ),
+            "real_pages_at_boundary": int(
+                transition.get("real_pages_at_boundary", 0)
+            ),
+            "reclaimed_pages_total": reclaimed_pages,
+            "peak_real_pages": peak_real_pages,
+            "physical_page_cap": int(transition.get("physical_page_cap", 0)),
+            "peak_within_cap": peak_real_pages <= physical_cap,
         },
         "worker": {
             "shrunk_records": len(shrunk_worker),
@@ -182,9 +191,10 @@ def summarize(
         },
         "interpretation": {
             "proven_if_go": (
-                "One live request transitions from full scheduler-owned QSA history "
-                "to a full logical row with host-backed null holes and <=4160 real "
-                "QSA pages; retained history survives generic CPU backing restore; "
+                "One live request progressively reclaims processed nonresident "
+                "QSA history while keeping a full logical row; scheduler ownership "
+                "never exceeds 4160 real QSA pages under the 1024-token chunk gate; "
+                "retained history survives generic CPU backing restore; "
                 "active writes and sparse reads use the same scheduler-owned cache; "
                 "target semantics survive."
             ),
