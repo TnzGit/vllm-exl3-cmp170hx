@@ -74,15 +74,22 @@ def test_runtime_spec_separates_logical_width_from_bounded_accounting():
     assert spec.page_size_bytes == 32768
     assert spec.physical_page_cap == 4160
     assert spec.max_num_blocks_per_req(None, 161000) == 10063
-    assert spec.max_memory_usage_bytes(None) == 4160 * 32768
+    # Generic shared-HMA config keeps one normal-geometry placeholder page.
+    # The real 4160+null QSA pages live in the model-owned dedicated tensor.
+    assert spec.max_memory_usage_bytes(None) == 32768
+    assert spec.dedicated_page_count == 4161
+    assert spec.virtual_null_block_id == 4160
+    assert spec.dedicated_memory_bytes_per_layer == 4161 * 32768
     assert spec.prefix_cacheable is False
 
 
-def test_full_sequence_admission_uses_recycling_peak_not_logical_width():
-    _, _, mgr = _manager()
+def test_full_sequence_admission_costs_zero_shared_blocks():
+    _, pool, mgr = _manager()
     assert mgr.get_num_blocks_to_allocate(
         "r", 161000, [], 0, 0, 161000, apply_admission_cap=True
-    ) == 4160
+    ) == 0
+    assert mgr.virtual_free_pages == 4160
+    assert len(pool.free) == 20000
 
 
 def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
@@ -97,12 +104,14 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
     for processed in range(0, 160000, 1024):
         mgr.remove_skipped_blocks(req, processed)
         target = min(processed + 1024, 160000)
-        predicted = mgr.get_num_blocks_to_allocate(
+        shared_cost = mgr.get_num_blocks_to_allocate(
             req, target, [], processed, processed, target
         )
         fresh = mgr.allocate_new_blocks(req, target, target)
-        assert len(fresh) == predicted
+        assert shared_cost == 0
+        assert len(fresh) <= 64 or processed < 65536
         assert mgr._real_count(req) <= 4160
+        assert mgr.virtual_free_pages == 4160 - mgr._real_count(req)
 
     # Commit the final historical chunk: all non-sticky history is now null.
     mgr.remove_skipped_blocks(req, 160000)
@@ -111,8 +120,11 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
     assert mgr._real_count(req) == 4096
     assert all(not blocks[i].is_null for i in range(4096))
     assert all(blocks[i].is_null for i in range(4096, 10000))
-    assert len(pool.freed) == 5904
+    assert len(pool.freed) == 0
     assert mgr._peak_real_pages[req] == 4160
+    assert mgr.virtual_free_pages == 64
+    assert all(0 <= b.block_id < 4160 for b in blocks if not b.is_null)
+    assert all(b.block_id == 4160 for b in blocks if b.is_null)
 
     rows = [json.loads(x) for x in stats.read_text().splitlines()]
     reclaim = [x for x in rows if x["event"] == "q2c_scheduler_reclaim"]
@@ -136,7 +148,7 @@ def test_post_boundary_allocation_only_grows_active_reserve():
 
     assert mgr.get_num_blocks_to_allocate(
         req, 161000, [], 160000, 160000, 161000
-    ) == 63
+    ) == 0
     fresh = mgr.allocate_new_blocks(req, 161000, 161000)
     assert len(fresh) == 63
     assert len(mgr.req_to_blocks[req]) == 10063
@@ -144,7 +156,7 @@ def test_post_boundary_allocation_only_grows_active_reserve():
 
     assert mgr.get_num_blocks_to_allocate(
         req, 161024, [], 161000, 161000, 161024
-    ) == 1
+    ) == 0
     fresh = mgr.allocate_new_blocks(req, 161024, 161024)
     assert len(fresh) == 1
     assert mgr._real_count(req) == 4160
@@ -163,3 +175,18 @@ def test_runtime_plan_is_strict():
     bad_chunk = dict(_plan(), scheduler_chunk_tokens=2048)
     with pytest.raises(ValueError, match="chunk must equal"):
         validate_runtime_plan(bad_chunk)
+
+
+def test_virtual_blocks_never_return_to_shared_pool():
+    _, pool, mgr = _manager()
+    req = "r"
+    mgr.allocate_new_blocks(req, 1024, 1024)
+    assert mgr._real_count(req) == 64
+    ids = [b.block_id for b in mgr.req_to_blocks[req] if not b.is_null]
+    assert ids == list(range(64))
+    assert mgr.take_new_block_ids() == []
+    returned = mgr.pop_blocks_for_free(req)
+    assert returned == []
+    assert mgr.virtual_free_pages == 4160
+    assert len(pool.free) == 20000
+    assert pool.freed == []
