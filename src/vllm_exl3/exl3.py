@@ -1051,19 +1051,20 @@ def _metadata_bulk_ab_commit(layer: Any) -> None:
 
         full_dest = _metadata_bulk_ab_full_dest(layer, suffix, shard_id)
         commit_t0 = time.perf_counter()
+        target_shape = (len(ids), *tuple(full_dest.shape[1:]))
         if suffix in ("mcg", "mul1"):
             batch = torch.tensor(
                 [int(by_eid[eid]) for eid in ids],
-                dtype=dest.dtype,
-            ).reshape(dest.shape)
+                dtype=full_dest.dtype,
+            ).reshape(target_shape)
         else:
             tensors = [by_eid[eid] for eid in ids]
             batch = torch.stack(
                 [t if t.is_contiguous() else t.contiguous() for t in tensors],
                 dim=0,
             )
-            if batch.dtype != dest.dtype:
-                batch = batch.to(dtype=dest.dtype)
+            if batch.dtype != full_dest.dtype:
+                batch = batch.to(dtype=full_dest.dtype)
 
         contiguous_odd = ids == list(range(ids[0], ids[-1] + 1, 2))
         if contiguous_odd:
