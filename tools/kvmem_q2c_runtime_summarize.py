@@ -28,6 +28,8 @@ def summarize(
     expected_transfer = resident_count * page_size
     expected_jobs = (resident_count + staging_pages - 1) // staging_pages
     expected_staging_bytes = staging_pages * page_size
+    expected_dedicated_pages = physical_cap + 1
+    expected_dedicated_bytes = expected_dedicated_pages * page_size
 
     reclaim_rows = [
         r for r in scheduler_rows if r.get("event") == "q2c_scheduler_reclaim"
@@ -65,6 +67,23 @@ def summarize(
         and all(int(r["resident_history_pages"]) == resident_count for r in by_layer.values())
         and all(int(r["hole_pages"]) > 0 for r in by_layer.values())
         and all(int(r["hole_unique_ids"]) == 1 for r in by_layer.values())
+        and all(bool(r.get("dedicated_bound")) for r in by_layer.values())
+        and all(
+            int(r.get("dedicated_pages", 0)) == expected_dedicated_pages
+            for r in by_layer.values()
+        )
+        and all(
+            int(r.get("dedicated_bytes", 0)) == expected_dedicated_bytes
+            for r in by_layer.values()
+        )
+        and all(
+            int(r.get("virtual_null_block_id", -1)) == physical_cap
+            for r in by_layer.values()
+        )
+        and all(
+            int(r.get("placeholder_bytes", 0)) > 0
+            for r in by_layer.values()
+        )
     )
     cpu_gate = bool(
         layer_gate
@@ -192,6 +211,17 @@ def summarize(
             "expected_jobs_per_layer": expected_jobs,
             "staging_bytes_per_layer": expected_staging_bytes,
             "staging_mib_per_layer": expected_staging_bytes / 2**20,
+            "dedicated_pages_per_layer": expected_dedicated_pages,
+            "dedicated_bytes_per_layer": expected_dedicated_bytes,
+            "dedicated_mib_per_layer": expected_dedicated_bytes / 2**20,
+            "dedicated_gib_all_qsa_layers": (
+                expected_dedicated_bytes * expected_layers / 2**30
+            ),
+            "virtual_null_block_id": physical_cap,
+            "placeholder_bytes_by_layer": {
+                k: int(v.get("placeholder_bytes", 0))
+                for k, v in by_layer.items()
+            },
             "historical_selected": hist_total,
             "historical_resident_kept": hist_kept,
             "historical_selected_dropped": hist_dropped,
