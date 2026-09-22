@@ -317,3 +317,82 @@ Q2E does not yet prove an event-fenced asynchronous consumer path, removal of
 the allocated staging tensor, a broad prompt suite, 240K, MTP, multi-request
 concurrency, recurrent-state restoration, or NVMe backing. Any replacement of
 the synchronous consumer barrier requires a new semantic qualification.
+
+## Q2E-2 persistent dynamic READ table
+
+The first Q2E-2 candidate at exact SHA
+`adbe46e59c120394f7951ea88faac2d434c5e385` tested small page-planning
+changes. It remained a semantic GO but regressed the request to 250.57 seconds:
+prefill selection rose to 18.26 seconds and table construction to 20.91
+seconds. Split timing showed that table allocation itself cost only 0.73
+seconds; about 19.68 seconds was spent repeatedly rebuilding Python mappings
+and destination tensors. That candidate was rejected.
+
+The successor keeps one persistent logical-to-physical table per QSA layer.
+Publication, miss assignment, and eviction update only their bounded mapping
+deltas; the scheduler WRITE view is refreshed once per forward. The original
+selection, 64-row split, LRU residency policy, READ/WRITE partition, transfer
+path, and 4,160-page cap are unchanged. Extra valid entries for other resident
+pages are semantically inert because QSA indexes only the original selected
+logical tokens.
+
+An initially failed paired-policy gate exposed a gate-definition issue rather
+than a scheduler change. The baseline generated 104 completion tokens while
+the candidate generated 143, so a digest over the whole request included two
+additional decode page cycles. At the frozen 159,533-token prompt boundary,
+both runs contained the same 312 canonical scheduler events and the exact same
+digest:
+
+```text
+6cfb508dbd49e52b3f8fa4a55f9a8a92dd44cf881acce7dbfcc106fa0c4c2c76
+```
+
+The gate now hashes only the frozen prefill policy, rejects any event that
+crosses that boundary, and retains the full-request digest as a diagnostic.
+This prevents output-length variation from weakening or spuriously failing the
+ownership-policy comparison.
+
+Exact head `ddcf37feb86021e8c05288f099d86fe8f48177cc` added a diagnostic GPU
+table oracle. With the oracle required, a complete 160K run checked at least
+2,634 sub-batches and 3,964,525 actual device-table entries per layer against
+the exact CPU READ/WRITE mapping. It returned the target answer and passed all
+semantic, coverage, capacity, CPU-authority, publication, scheduler, trace,
+restore, and machine-health gates. Its 253.82-second wall time is diagnostic
+only because the synchronous oracle deliberately reconstructs and reads back
+the reference mapping.
+
+The final oracle-off performance qualification used the same exact head and
+classified:
+
+```text
+Q2D_CPU_AUTHORITATIVE_STREAMING_SEMANTIC_GO
+```
+
+It recorded:
+
+- exact target answer and `finish_reason=stop`;
+- 1,872/1,872 prefill records across 12 layers;
+- WRITE peak 128, READ peak 4,032, combined peak 4,160;
+- at least 9,979 published and bit-exact round-tripped pages/layer;
+- exact frozen-prefill scheduler digest and a clean boundary gate;
+- zero D2D staging copies;
+- Xid delta zero, exact installed-QSA restore, 14 MiB post-run GPU use, and no
+  residual GPU/vLLM process;
+- request wall time 235.08 seconds;
+- prefill table-management time 0.254 seconds.
+
+Against the matched direct baseline at `5298916b`, request wall time improved
+from 248.16 to 235.08 seconds (13.08 seconds, about 5.3%), while prefill table
+management fell from 18.60 to 0.254 seconds. Prefill exposed worker time fell
+from 124.05 to 106.86 seconds. The candidate produced 141 completion tokens
+versus the baseline's 104, so the end-to-end improvement was not obtained by
+shortening generation.
+
+The next optimization target is now history-stage bookkeeping and LRU victim
+selection: about 52.91 seconds remains in `stage_history`, versus 21.62 seconds
+of measured H2D worker wall time. Selection planning remains about 17.62
+seconds and qualification trace emission about 19.13 seconds. A semantics-
+preserving LRU data-structure change should be trace-replayed against the old
+victim sequence before another live run. Fine-grained producer/consumer event
+ordering remains later work; the proven synchronous barrier stays frozen until
+that separate candidate passes its own qualification.
