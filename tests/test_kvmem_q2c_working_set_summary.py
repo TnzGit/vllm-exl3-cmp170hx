@@ -12,7 +12,10 @@ def _plan():
     }
 
 
-def _row(layer, first, last, working, misses, batch512=5, batch256=3):
+def _row(
+    layer, first, last, working, misses,
+    batch512=5, batch256=3, batch128=3, batch64=2,
+):
     return {
         "mode": "a_full_original",
         "layer": layer,
@@ -25,6 +28,8 @@ def _row(layer, first, last, working, misses, batch512=5, batch256=3):
         "unique_pages_with_current_writes_before": working,
         "row_batch_512_max_working_pages": batch512,
         "row_batch_256_max_working_pages": batch256,
+        "row_batch_128_max_working_pages": batch128,
+        "row_batch_64_max_working_pages": batch64,
     }
 
 

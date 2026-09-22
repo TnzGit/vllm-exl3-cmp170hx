@@ -90,7 +90,7 @@ def summarize(rows: list[dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any
     logical_pages = math.ceil(prompt_tokens / int(plan["page_tokens"]))
     cpu_backing_bytes = logical_pages * PAGE_BYTES * expected_layers
     whole_chunk_feasible = bool(fields_gate and maximum <= cap)
-    row_batch_sizes = (512, 256)
+    row_batch_sizes = (512, 256, 128, 64)
     row_batch_evidence: dict[str, dict[str, Any]] = {}
     for size in row_batch_sizes:
         field = f"row_batch_{size}_max_working_pages"
