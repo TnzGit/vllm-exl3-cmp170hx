@@ -84,11 +84,14 @@ def _q2c_stats(payload):
 
 
 def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
-    """Mask selections whose logical page is already a scheduler null hole.
+    """Mask processed historical pages outside the frozen resident set.
 
-    This is intentionally driven by actual block-table ownership, not merely
-    by the frozen resident list. Pages in the current unprocessed chunk still
-    have real block IDs and remain visible for causal prefill.
+    vLLM 0.29's worker block table is append-only for running requests: when
+    the scheduler reclaims an old QSA logical position, that old worker entry
+    is not overwritten with the scheduler's null ID. This is safe only if
+    reclaimed logical positions are masked by policy before attention. New work
+    pages are still appended in exact logical order and may reuse the released
+    virtual physical IDs.
     """
     if block_table.ndim != 2 or block_table.shape[0] != 1:
         raise RuntimeError("Q2C runtime currently requires one request")
@@ -96,27 +99,11 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
     page_tokens = int(plan["page_tokens"])
     pos = positions.to(device=selected.device, dtype=torch.int64)
     valid = selected >= 0
+    apply_rows = pos >= int(plan["apply_min_pos"])
     if not bool(valid.any().item()):
-        apply_rows = pos >= int(plan["apply_min_pos"])
         return apply_rows, 0, 0, 0
 
-    # Only pages strictly before the current forward's first page are guaranteed
-    # processed and therefore eligible for progressive reclamation.
     first_query_page = int(pos.min().item()) // page_tokens if pos.numel() else 0
-    hist_end = min(first_query_page, int(plan["active_page0"]))
-    resident_set = set(int(x) for x in plan["resident_pages"])
-    first_hole = None
-    for page in range(hist_end):
-        if page not in resident_set:
-            first_hole = page
-            break
-
-    null_id = (
-        block_table[0, first_hole].to(torch.int64)
-        if first_hole is not None
-        else None
-    )
-
     logical = selected.clamp_min(0).to(torch.int64)
     pages = torch.div(logical, page_tokens, rounding_mode="floor")
     if bool(valid.any().item()):
@@ -126,21 +113,20 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
                 f"Q2C selected page {max_page} exceeds block-table width "
                 f"{block_table.shape[1]}"
             )
-    page_ids = block_table[0].index_select(0, pages.reshape(-1)).reshape_as(pages)
-    historical = logical < int(plan["active_from_pos"])
-    processed_history = pages < hist_end
-    drop = (
-        valid & historical & processed_history & (page_ids == null_id)
-        if null_id is not None
-        else torch.zeros_like(valid)
+
+    resident_pages = _q2c_tensor(
+        plan, "resident_pages", plan["resident_pages"], selected.device
     )
+    keep_resident = torch.isin(pages, resident_pages)
+    historical = logical < int(plan["active_from_pos"])
+    processed_history = pages < first_query_page
+    drop = valid & historical & processed_history & ~keep_resident
 
     historical_total = int((valid & historical).sum().item())
     dropped = int(drop.sum().item())
     historical_kept = historical_total - dropped
     selected.masked_fill_(drop, -1)
 
-    apply_rows = pos >= int(plan["apply_min_pos"])
     if bool((pos < int(plan["apply_min_pos"])).any().item()):
         layer._q2c_prefill_dropped = int(
             getattr(layer, "_q2c_prefill_dropped", 0)
@@ -158,7 +144,9 @@ def _q2c_table_evidence(layer, plan, block_table, positions):
     max_pos = int(positions.max().item()) if positions.numel() else -1
     logical_pages = max(0, (max_pos + 1 + page_tokens - 1) // page_tokens)
     logical_pages = min(logical_pages, int(block_table.shape[1]))
+    physical_cap = int(plan["physical_page_count"])
     active_page0 = int(plan["active_page0"])
+
     resident = [int(x) for x in plan["resident_pages"] if int(x) < logical_pages]
     resident_idx = _q2c_tensor(
         plan, f"resident_pages_prefix_{len(resident)}", resident, block_table.device
@@ -167,17 +155,22 @@ def _q2c_table_evidence(layer, plan, block_table, positions):
         block_table[0].index_select(0, resident_idx).to(torch.int64)
         if resident else torch.empty(0, dtype=torch.int64, device=block_table.device)
     )
-
-    hist_end = min(active_page0, logical_pages)
-    resident_set = set(resident)
-    holes = [i for i in range(hist_end) if i not in resident_set]
-    hole_idx = _q2c_tensor(plan, f"holes_{hist_end}", holes, block_table.device)
-    hole_ids = (
-        block_table[0].index_select(0, hole_idx).to(torch.int64)
-        if holes else torch.empty(0, dtype=torch.int64, device=block_table.device)
-    )
-    hole_unique = torch.unique(hole_ids) if hole_ids.numel() else hole_ids
     resident_unique = torch.unique(resident_ids) if resident_ids.numel() else resident_ids
+    resident_ids_valid = bool(
+        resident_ids.numel() == len(resident)
+        and resident_unique.numel() == len(resident)
+        and (
+            resident_ids.numel() == 0
+            or bool(((resident_ids >= 0) & (resident_ids < physical_cap)).all().item())
+        )
+    )
+
+    table_ids = block_table[0, :logical_pages].to(torch.int64)
+    unique_ids = torch.unique(table_ids) if table_ids.numel() else table_ids
+    virtual_id_range_ok = bool(
+        table_ids.numel() == 0
+        or bool(((table_ids >= 0) & (table_ids < physical_cap)).all().item())
+    )
 
     active_end = logical_pages
     active_pages = max(0, active_end - active_page0)
@@ -187,26 +180,18 @@ def _q2c_table_evidence(layer, plan, block_table, positions):
     )
     active_unique = torch.unique(active_ids) if active_ids.numel() else active_ids
 
-    shrunk = bool(
-        holes
-        and hole_unique.numel() == 1
-        and resident_unique.numel() == len(resident)
-        and (
-            resident_unique.numel() == 0
-            or not bool(torch.isin(hole_unique, resident_unique).any().item())
-        )
-    )
-    real_ids = torch.cat((resident_unique, active_unique))
-    real_unique = torch.unique(real_ids) if real_ids.numel() else real_ids
     return {
-        "shrunk": shrunk,
+        # "shrunk" here means the logical sequence has reached the frozen
+        # boundary. Scheduler-side stats are authoritative for actual null
+        # holes and real-page occupancy.
+        "shrunk": max_pos >= int(plan["apply_min_pos"]),
         "logical_pages": logical_pages,
         "resident_history_pages": len(resident),
         "active_real_pages": int(active_unique.numel()),
-        "scheduler_real_pages": int(real_unique.numel()),
-        "hole_pages": len(holes),
-        "hole_unique_ids": int(hole_unique.numel()),
-        "null_block_id": int(hole_unique[0].item()) if shrunk else None,
+        "worker_unique_virtual_ids": int(unique_ids.numel()),
+        "virtual_id_range_ok": virtual_id_range_ok,
+        "resident_ids_valid": resident_ids_valid,
+        "worker_table_mode": "append_only_virtual_ids",
         "resident_physical_ids": resident_ids,
     }
 
@@ -351,11 +336,8 @@ def _q2c_run(
         _q2c_restore_history_from_cpu(
             layer, plan, layer.kv_cache, main_metadata.block_table
         )
-        if evidence["scheduler_real_pages"] > int(plan["physical_page_count"]):
-            raise RuntimeError(
-                "Q2C worker sees scheduler real pages above physical cap: "
-                f'{evidence["scheduler_real_pages"]} > {plan["physical_page_count"]}'
-            )
+        if not evidence["virtual_id_range_ok"] or not evidence["resident_ids_valid"]:
+            raise RuntimeError("Q2C worker virtual block-table evidence is invalid")
 
     # Apply the bounded visibility policy on every forward. Before the frozen
     # query boundary this masks only pages the scheduler has already reclaimed;
@@ -385,9 +367,12 @@ def _q2c_run(
                 "physical_page_cap": int(plan["physical_page_count"]),
                 "resident_history_pages": int(evidence["resident_history_pages"]),
                 "active_real_pages": int(evidence["active_real_pages"]),
-                "hole_pages": int(evidence["hole_pages"]),
-                "hole_unique_ids": int(evidence["hole_unique_ids"]),
-                "null_block_id": evidence["null_block_id"],
+                "worker_unique_virtual_ids": int(
+                    evidence["worker_unique_virtual_ids"]
+                ),
+                "virtual_id_range_ok": bool(evidence["virtual_id_range_ok"]),
+                "resident_ids_valid": bool(evidence["resident_ids_valid"]),
+                "worker_table_mode": evidence["worker_table_mode"],
                 "historical_selected": int(hist_total),
                 "historical_resident_kept": int(hist_kept),
                 "historical_selected_dropped": int(dropped),
