@@ -6,7 +6,12 @@ This branch is the first live ownership proof after the Q2C scheduler-shrink
 preflight. It is deliberately narrower than the final multi-turn product.
 
 The proof target is one frozen 160K `ask_d_e` request, eager, MTP off, prefix
-cache off, with the exact K1B sticky resident policy.
+cache off, with the exact K1B turn-specific sticky resident plan.
+
+This is an **oracle/frozen-plan mechanical proof**, not a production residency
+policy: the resident set was computed offline for this turn and is applied
+throughout prefill. A production implementation must later choose/update
+residency causally without future-turn knowledge.
 
 ## Runtime invariant
 
@@ -61,7 +66,7 @@ The transient reference is one staging chunk, not a persistent resident shadow.
 
 ## GO classification
 
-`Q2C_SCHEDULER_OWNERSHIP_SEMANTIC_GO` requires all of:
+`Q2C_FROZEN_PLAN_OWNERSHIP_SEMANTIC_GO` requires all of:
 
 - scheduler emits progressive reclaim events;
 - one boundary event reports logical row > physical cap;
@@ -72,7 +77,7 @@ The transient reference is one staging chunk, not a persistent resident shadow.
 - 4096 retained pages/layer publish and restore through generic CPU backing;
 - D2H and H2D each exactly 128 MiB/layer, 32 jobs at 128 pages/job;
 - restored CPU bytes exactly match bytes destroyed from the scheduler cache;
-- visibility accounting is exercised (`historical_selected_dropped > 0`);
+- progressive prefill visibility is exercised (`prefill_historical_selected_dropped > 0`);\n- boundary/query visibility accounting is exercised (`historical_selected_dropped > 0`);
 - frozen target codes remain correct and request finishes with `stop`;
 - Xid delta = 0 and installed QSA restores byte-for-byte.
 
