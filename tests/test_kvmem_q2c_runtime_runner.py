@@ -32,6 +32,8 @@ def test_q2c_runtime_runner_contract():
 
 
 def test_firstboot_launcher_accepts_explicit_batch_token_cap():
+    r = subprocess.run(["bash", "-n", str(LAUNCHER)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
     src = LAUNCHER.read_text()
     assert 'MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-}"' in src
     assert 'ARGS+=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")' in src
