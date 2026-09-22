@@ -63,10 +63,17 @@ def summarize(
     worker_geometry_gate = bool(
         layer_gate
         and all(int(r["logical_pages"]) > physical_cap for r in by_layer.values())
-        and all(int(r["scheduler_real_pages"]) <= physical_cap for r in by_layer.values())
+        and all(
+            int(r["worker_unique_virtual_ids"]) <= physical_cap
+            for r in by_layer.values()
+        )
         and all(int(r["resident_history_pages"]) == resident_count for r in by_layer.values())
-        and all(int(r["hole_pages"]) > 0 for r in by_layer.values())
-        and all(int(r["hole_unique_ids"]) == 1 for r in by_layer.values())
+        and all(bool(r.get("virtual_id_range_ok")) for r in by_layer.values())
+        and all(bool(r.get("resident_ids_valid")) for r in by_layer.values())
+        and all(
+            r.get("worker_table_mode") == "append_only_virtual_ids"
+            for r in by_layer.values()
+        )
         and all(bool(r.get("dedicated_bound")) for r in by_layer.values())
         and all(
             int(r.get("dedicated_pages", 0)) == expected_dedicated_pages
@@ -184,16 +191,22 @@ def summarize(
             "layers": layers,
             "layer_count": len(layers),
             "expected_layer_count": expected_layers,
-            "max_scheduler_real_pages": max(
-                (int(r["scheduler_real_pages"]) for r in by_layer.values()),
+            "max_worker_unique_virtual_ids": max(
+                (int(r["worker_unique_virtual_ids"]) for r in by_layer.values()),
                 default=0,
             ),
             "min_logical_pages": min(
                 (int(r["logical_pages"]) for r in by_layer.values()),
                 default=0,
             ),
-            "hole_unique_ids": sorted(
-                {int(r["hole_unique_ids"]) for r in by_layer.values()}
+            "virtual_id_range_ok_all": all(
+                bool(r.get("virtual_id_range_ok")) for r in by_layer.values()
+            ),
+            "resident_ids_valid_all": all(
+                bool(r.get("resident_ids_valid")) for r in by_layer.values()
+            ),
+            "worker_table_modes": sorted(
+                {str(r.get("worker_table_mode")) for r in by_layer.values()}
             ),
             "d2h_bytes_by_layer": {
                 k: int(v["d2h_bytes"]) for k, v in by_layer.items()
@@ -235,14 +248,17 @@ def summarize(
             "proven_if_go": (
                 "One live 160K request applies the frozen K1B turn-specific "
                 "64K visibility plan throughout prefill, progressively reclaims "
-                "processed nonresident QSA pages while preserving the logical row, "
-                "keeps scheduler ownership <=4160 real pages, restores retained "
+                "processed nonresident QSA pages into scheduler-side null holes "
+                "while the vLLM 0.29 worker keeps its append-only logical table; "
+                "the worker masks reclaimed logical positions before attention, "
+                "keeps all virtual IDs inside the dedicated <=4160 range, restores retained "
                 "history byte-exactly through generic CPU backing, and preserves "
                 "the frozen target semantics."
             ),
             "not_proven": [
                 "a production planner can choose the same resident set causally without future-turn knowledge",
                 "exact hidden-state or token parity versus the full-history baseline",
+                "worker-side in-place null-hole table overwrite (vLLM 0.29 table is append-only)",
                 "multi-request concurrency improvement",
                 "240K runtime",
                 "MTP follower correctness",
