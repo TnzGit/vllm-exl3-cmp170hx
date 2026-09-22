@@ -23,11 +23,13 @@ from pathlib import Path
 MARKER_PLATFORM = "# KVMEM_Q2C_DUAL_POOL_PLATFORM_V1"
 MARKER_CORE = "# KVMEM_Q2C_DUAL_POOL_CORE_V1"
 MARKER_WORKER = "# KVMEM_Q2C_DUAL_POOL_WORKER_V1"
+MARKER_COORD = "# KVMEM_Q2C_DUAL_POOL_COORDINATOR_V1"
 
 TARGETS = {
     "platform": Path("platforms/interface.py"),
     "core": Path("v1/core/kv_cache_utils.py"),
     "worker": Path("v1/worker/utils.py"),
+    "coordinator": Path("v1/core/kv_cache_coordinator.py"),
 }
 
 PLATFORM_OLD = """        # Phase 2: Align block/mamba sizes for hybrid models
@@ -346,6 +348,38 @@ CORE_SINGLE_WORKER_NEW = """    if any(
     min_num_blocks = min(
 """
 
+COORD_IMPORT_OLD = """from abc import ABC, abstractmethod
+"""
+COORD_IMPORT_NEW = """from abc import ABC, abstractmethod
+import os
+"""
+
+COORD_KV_IMPORT_OLD = """    SlidingWindowSpec,
+)
+"""
+COORD_KV_IMPORT_NEW = """    SlidingWindowSpec,
+    UniformTypeKVCacheSpecs,
+)
+"""
+
+COORD_MANAGER_OLD = """            get_manager_for_kv_cache_spec(
+                kv_cache_spec=kv_cache_group.kv_cache_spec,
+"""
+COORD_MANAGER_NEW = """            get_manager_for_kv_cache_spec(
+                # KVMEM_Q2C_DUAL_POOL_COORDINATOR_V1
+                kv_cache_spec=(
+                    kv_cache_group.kv_cache_spec.first_spec
+                    if (
+                        os.environ.get("VLLM_QWEN_KVMEM_Q2C_PLAN")
+                        and isinstance(
+                            kv_cache_group.kv_cache_spec,
+                            UniformTypeKVCacheSpecs,
+                        )
+                    )
+                    else kv_cache_group.kv_cache_spec
+                ),
+"""
+
 WORKER_IMPORT_OLD = """import math
 """
 WORKER_IMPORT_NEW = """import math
@@ -544,6 +578,18 @@ def patch_core(src: str) -> str:
     return out
 
 
+def patch_coordinator(src: str) -> str:
+    if MARKER_COORD in src:
+        return src
+    out = replace_once(src, COORD_IMPORT_OLD, COORD_IMPORT_NEW, "coordinator os import")
+    out = replace_once(
+        out, COORD_KV_IMPORT_OLD, COORD_KV_IMPORT_NEW, "coordinator kv import"
+    )
+    return replace_once(
+        out, COORD_MANAGER_OLD, COORD_MANAGER_NEW, "coordinator manager unwrap"
+    )
+
+
 def patch_worker(src: str) -> str:
     if MARKER_WORKER in src:
         return src
@@ -562,6 +608,7 @@ def main() -> int:
         "platform": patch_platform,
         "core": patch_core,
         "worker": patch_worker,
+        "coordinator": patch_coordinator,
     }
     outputs: dict[str, tuple[Path, str]] = {}
     try:
