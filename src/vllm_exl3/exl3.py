@@ -919,6 +919,192 @@ def loader_timing_stats() -> dict[str, Any]:
     return dict(_LOAD_TIMING_STATS)
 
 
+_METADATA_BULK_AB_STATS: dict[str, Any] = {
+    "enabled": False,
+    "control_calls": 0,
+    "control_bytes": 0,
+    "control_wall_s": 0.0,
+    "deferred_calls": 0,
+    "deferred_bytes": 0,
+    "deferred_stage_wall_s": 0.0,
+    "commit_calls": 0,
+    "commit_bytes": 0,
+    "commit_wall_s": 0.0,
+    "committed_layers": 0,
+    "strided_commit_calls": 0,
+    "index_commit_calls": 0,
+    "control_by_suffix": {},
+    "deferred_by_suffix": {},
+    "commit_by_suffix": {},
+}
+
+
+def _metadata_bulk_ab_enabled() -> bool:
+    return os.environ.get("VLLM_EXL3_METADATA_BULK_AB", "0") == "1"
+
+
+def _metadata_bulk_ab_bucket(section: str, suffix: str) -> dict[str, Any]:
+    table = _METADATA_BULK_AB_STATS[section]
+    bucket = table.setdefault(
+        suffix,
+        {"calls": 0, "bytes": 0, "wall_s": 0.0},
+    )
+    return bucket
+
+
+def _metadata_bulk_ab_record(
+    arm: str,
+    suffix: str,
+    *,
+    nbytes: int,
+    wall_s: float,
+) -> None:
+    if arm == "control":
+        _METADATA_BULK_AB_STATS["control_calls"] += 1
+        _METADATA_BULK_AB_STATS["control_bytes"] += int(nbytes)
+        _METADATA_BULK_AB_STATS["control_wall_s"] += float(wall_s)
+        bucket = _metadata_bulk_ab_bucket("control_by_suffix", suffix)
+    elif arm == "deferred":
+        _METADATA_BULK_AB_STATS["deferred_calls"] += 1
+        _METADATA_BULK_AB_STATS["deferred_bytes"] += int(nbytes)
+        _METADATA_BULK_AB_STATS["deferred_stage_wall_s"] += float(wall_s)
+        bucket = _metadata_bulk_ab_bucket("deferred_by_suffix", suffix)
+    else:
+        raise ValueError(f"unknown EXL3 metadata A/B arm: {arm}")
+    bucket["calls"] += 1
+    bucket["bytes"] += int(nbytes)
+    bucket["wall_s"] += float(wall_s)
+
+
+def metadata_bulk_ab_stats() -> dict[str, Any]:
+    out = dict(_METADATA_BULK_AB_STATS)
+    out["enabled"] = _metadata_bulk_ab_enabled()
+    out["control_by_suffix"] = {
+        k: dict(v)
+        for k, v in _METADATA_BULK_AB_STATS["control_by_suffix"].items()
+    }
+    out["deferred_by_suffix"] = {
+        k: dict(v)
+        for k, v in _METADATA_BULK_AB_STATS["deferred_by_suffix"].items()
+    }
+    out["commit_by_suffix"] = {
+        k: dict(v)
+        for k, v in _METADATA_BULK_AB_STATS["commit_by_suffix"].items()
+    }
+    return out
+
+
+def _metadata_bulk_ab_stage(
+    layer: Any,
+    *,
+    suffix: str,
+    shard_id: str,
+    expert_id: int,
+    payload: Any,
+) -> None:
+    stage = getattr(layer, "_exl3_metadata_bulk_ab_stage", None)
+    if stage is None:
+        stage = {}
+        layer._exl3_metadata_bulk_ab_stage = stage
+    group = stage.setdefault((suffix, shard_id), {})
+    eid = int(expert_id)
+    if eid in group:
+        raise RuntimeError(
+            f"duplicate EXL3 metadata stage suffix={suffix} "
+            f"shard={shard_id} expert={eid}"
+        )
+    group[eid] = payload
+
+
+def _metadata_bulk_ab_full_dest(layer: Any, suffix: str, shard_id: str):
+    if shard_id in ("w1", "w3"):
+        shard_idx = 0 if shard_id == "w1" else 1
+        return getattr(layer, "w13_" + suffix).data[:, shard_idx]
+    if shard_id == "w2":
+        return getattr(layer, "w2_" + suffix).data
+    raise ValueError(f"unknown EXL3 shard_id={shard_id}")
+
+
+def _metadata_bulk_ab_commit(layer: Any) -> None:
+    if not _metadata_bulk_ab_enabled():
+        return
+    stage = getattr(layer, "_exl3_metadata_bulk_ab_stage", None) or {}
+    if not stage:
+        return
+
+    n_experts = int(getattr(layer, "_exl3_n_experts", 0))
+    if n_experts < 2:
+        raise RuntimeError("EXL3 metadata bulk A/B requires at least two experts")
+
+    for (suffix, shard_id), by_eid in sorted(stage.items()):
+        ids = sorted(int(eid) for eid in by_eid)
+        if not ids or any((eid & 1) == 0 for eid in ids):
+            raise RuntimeError(
+                f"EXL3 metadata bulk A/B expected odd expert ids for "
+                f"{suffix}/{shard_id}, got {ids[:8]}"
+            )
+        if ids[-1] >= n_experts:
+            raise RuntimeError(
+                f"EXL3 metadata bulk A/B expert out of range "
+                f"{suffix}/{shard_id}: max={ids[-1]} n={n_experts}"
+            )
+
+        full_dest = _metadata_bulk_ab_full_dest(layer, suffix, shard_id)
+        commit_t0 = time.perf_counter()
+        target_shape = (len(ids), *tuple(full_dest.shape[1:]))
+        if suffix in ("mcg", "mul1"):
+            batch = torch.tensor(
+                [int(by_eid[eid]) for eid in ids],
+                dtype=full_dest.dtype,
+            ).reshape(target_shape)
+        else:
+            tensors = [by_eid[eid] for eid in ids]
+            batch = torch.stack(
+                [t if t.is_contiguous() else t.contiguous() for t in tensors],
+                dim=0,
+            )
+            if batch.dtype != full_dest.dtype:
+                batch = batch.to(dtype=full_dest.dtype)
+
+        contiguous_odd = ids == list(range(ids[0], ids[-1] + 1, 2))
+        if contiguous_odd:
+            dest = full_dest[ids[0] : ids[-1] + 1 : 2]
+            if tuple(batch.shape) != tuple(dest.shape):
+                raise RuntimeError(
+                    f"EXL3 metadata bulk commit shape mismatch "
+                    f"{suffix}/{shard_id}: batch={tuple(batch.shape)} "
+                    f"dest={tuple(dest.shape)}"
+                )
+            dest.copy_(batch, non_blocking=False)
+            _METADATA_BULK_AB_STATS["strided_commit_calls"] += 1
+        else:
+            if tuple(batch.shape[1:]) != tuple(full_dest.shape[1:]):
+                raise RuntimeError(
+                    f"EXL3 metadata bulk indexed shape mismatch "
+                    f"{suffix}/{shard_id}: batch={tuple(batch.shape)} "
+                    f"dest={tuple(full_dest.shape)}"
+                )
+            index = torch.tensor(ids, dtype=torch.long, device=full_dest.device)
+            batch_dev = batch.to(device=full_dest.device, non_blocking=False)
+            full_dest.index_copy_(0, index, batch_dev)
+            _METADATA_BULK_AB_STATS["index_commit_calls"] += 1
+        elapsed = time.perf_counter() - commit_t0
+        nbytes = int(batch.numel()) * int(batch.element_size())
+
+        _METADATA_BULK_AB_STATS["commit_calls"] += 1
+        _METADATA_BULK_AB_STATS["commit_bytes"] += nbytes
+        _METADATA_BULK_AB_STATS["commit_wall_s"] += elapsed
+        bucket = _metadata_bulk_ab_bucket("commit_by_suffix", suffix)
+        bucket["calls"] += 1
+        bucket["bytes"] += nbytes
+        bucket["wall_s"] += elapsed
+
+    if not getattr(layer, "_exl3_metadata_bulk_ab_committed_once", False):
+        _METADATA_BULK_AB_STATS["committed_layers"] += 1
+        layer._exl3_metadata_bulk_ab_committed_once = True
+    layer._exl3_metadata_bulk_ab_stage = {}
+
+
 def _proc_io_snapshot() -> dict[str, int]:
     out: dict[str, int] = {}
     try:
@@ -960,6 +1146,7 @@ def _load_trace_record(tag: str, layer: Any | None = None) -> None:
         "proc_io": _proc_io_snapshot(),
         "direct_fill": direct_fill_stats(),
         "loader_timing": loader_timing_stats(),
+        "metadata_bulk_ab": metadata_bulk_ab_stats(),
     }
     if layer is not None:
         rec["layer"] = str(
@@ -2774,6 +2961,9 @@ def _exl3_routed_experts_loader(layer: torch.nn.Module):
             if ok:
                 yield local_name
 
+        if _metadata_bulk_ab_enabled():
+            _metadata_bulk_ab_commit(layer)
+
     return load_weights
 
 
@@ -3055,6 +3245,24 @@ class Exl3MoEMethod(FusedMoEMethodBase):
             # tensor so process_weights_after_loading can pick the codebook.
             if owner_mod is None:
                 raise RuntimeError("EXL3 marker load missing owner module")
+            marker_t0 = time.perf_counter()
+            marker_value = int(loaded.reshape(-1)[0].item()) if loaded.numel() else 0
+            if _metadata_bulk_ab_enabled() and (int(expert_id) & 1):
+                _metadata_bulk_ab_stage(
+                    owner_mod,
+                    suffix=suffix,
+                    shard_id=shard_id,
+                    expert_id=expert_id,
+                    payload=marker_value,
+                )
+                _metadata_bulk_ab_record(
+                    "deferred",
+                    suffix,
+                    nbytes=max(4, int(loaded.numel()) * int(loaded.element_size())),
+                    wall_s=time.perf_counter() - marker_t0,
+                )
+                return True if return_success else None
+
             if shard_id in ("w1", "w3"):
                 dest = getattr(owner_mod, "w13_" + suffix).data[
                     expert_id, 0 if shard_id == "w1" else 1
@@ -3063,7 +3271,14 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 dest = getattr(owner_mod, "w2_" + suffix).data[expert_id]
             else:
                 raise ValueError(f"unknown EXL3 shard_id={shard_id}")
-            dest.fill_(int(loaded.reshape(-1)[0].item()) if loaded.numel() else 0)
+            dest.fill_(marker_value)
+            if _metadata_bulk_ab_enabled():
+                _metadata_bulk_ab_record(
+                    "control",
+                    suffix,
+                    nbytes=max(4, int(loaded.numel()) * int(loaded.element_size())),
+                    wall_s=time.perf_counter() - marker_t0,
+                )
             return True if return_success else None
 
         if suffix == "trellis":
@@ -3224,6 +3439,7 @@ class Exl3MoEMethod(FusedMoEMethodBase):
         # suh / svh remain stacked (K-independent).
         if owner_mod is None:
             raise RuntimeError("EXL3 scale load missing owner module")
+        scale_t0 = time.perf_counter()
         if shard_id in ("w1", "w3"):
             shard_idx = 0 if shard_id == "w1" else 1
             sharded = shard_exl3_col(loaded, suffix, tp_rank, tp_size)
@@ -3242,7 +3458,32 @@ class Exl3MoEMethod(FusedMoEMethodBase):
                 f"expert={expert_id}: dest {tuple(dest.shape)} != "
                 f"loaded {tuple(sharded.shape)}"
             )
+
+        nbytes = int(sharded.numel()) * int(sharded.element_size())
+        if _metadata_bulk_ab_enabled() and (int(expert_id) & 1):
+            _metadata_bulk_ab_stage(
+                owner_mod,
+                suffix=suffix,
+                shard_id=shard_id,
+                expert_id=expert_id,
+                payload=sharded,
+            )
+            _metadata_bulk_ab_record(
+                "deferred",
+                suffix,
+                nbytes=nbytes,
+                wall_s=time.perf_counter() - scale_t0,
+            )
+            return True if return_success else None
+
         _copy_weight_blocking(dest, sharded)
+        if _metadata_bulk_ab_enabled():
+            _metadata_bulk_ab_record(
+                "control",
+                suffix,
+                nbytes=nbytes,
+                wall_s=time.perf_counter() - scale_t0,
+            )
         del loaded, sharded, loaded_weight
         return True if return_success else None
 
