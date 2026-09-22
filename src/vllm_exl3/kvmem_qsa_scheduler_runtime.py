@@ -149,10 +149,10 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             self.new_block_ids.extend(b.block_id for b in fresh)
 
         real = self._record_peak(request_id)
-        # During prefill the current scheduler chunk is allowed in addition to
-        # the eventual physical cap. The runner constrains that chunk to the
-        # same 64-page active reserve, so the actual peak is explicitly logged.
-        hard_peak = self.spec.physical_page_cap + self.spec.active_reserve_pages
+        # The runner constrains each scheduler chunk to the 64-page active
+        # reserve. Sticky resident pages plus the current work range must
+        # therefore never exceed the same 4,160-page product cap.
+        hard_peak = self.spec.physical_page_cap
         if real > hard_peak:
             raise RuntimeError(
                 f"Q2C scheduler real-page peak {real} exceeds guarded peak {hard_peak}"
