@@ -123,8 +123,14 @@ INIT_BLOCK = """    leftover_state_dict: dict[str, torch.Tensor] = {}
         raise RuntimeError(
             "EXL3 shard-prefetch A/B cannot run with full-checkpoint prefetch"
         )
+    _exl3_model_shards = [
+        path
+        for path in sorted_files
+        if os.path.basename(path).startswith("model-")
+        and os.path.basename(path).endswith(".safetensors")
+    ]
     _exl3_shard_ab_index = {
-        path: idx for idx, path in enumerate(sorted_files)
+        path: idx for idx, path in enumerate(_exl3_model_shards)
     }
     for st_file in tqdm(
 """
@@ -139,11 +145,20 @@ LAZY_ANCHOR = """        else:
 """
 
 LAZY_BLOCK = """        else:
-            _exl3_ab_idx = _exl3_shard_ab_index[st_file]
+            _exl3_ab_eligible = st_file in _exl3_shard_ab_index
+            _exl3_ab_idx = (
+                _exl3_shard_ab_index[st_file]
+                if _exl3_ab_eligible
+                else -1
+            )
             _exl3_ab_arm = (
-                "prefetch"
-                if _exl3_shard_ab_enabled and (_exl3_ab_idx & 1)
-                else "control"
+                "excluded"
+                if _exl3_shard_ab_enabled and not _exl3_ab_eligible
+                else (
+                    "prefetch"
+                    if _exl3_shard_ab_enabled and (_exl3_ab_idx & 1)
+                    else "control"
+                )
             )
             _exl3_ab_before = (
                 _exl3_shard_ab_snapshot()
@@ -199,6 +214,7 @@ LAZY_BLOCK = """        else:
                         "schema": 1,
                         "index": int(_exl3_ab_idx),
                         "arm": _exl3_ab_arm,
+                        "eligible": bool(_exl3_ab_eligible),
                         "file": os.path.basename(st_file),
                         "file_bytes": int(os.path.getsize(st_file)),
                         "consume_wall_s": float(_exl3_consume_wall),
@@ -241,6 +257,9 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "_exl3_start_shard_prefetch",
         '"prefetch_join_wall_s"',
         '"total_shard_wall_s"',
+        '"eligible"',
+        '"excluded"',
+        "_exl3_model_shards",
         "full-checkpoint prefetch",
     )
     missing = [item for item in required if item not in out]
