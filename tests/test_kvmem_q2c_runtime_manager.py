@@ -109,7 +109,7 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
         )
         fresh = mgr.allocate_new_blocks(req, target, target)
         assert shared_cost == 0
-        assert len(fresh) <= 64 or processed < 65536
+        assert len(fresh) <= 64
         assert mgr._real_count(req) <= 4160
         assert mgr.virtual_free_pages == 4160 - mgr._real_count(req)
 
@@ -160,10 +160,11 @@ def test_post_boundary_allocation_only_grows_active_reserve():
     fresh = mgr.allocate_new_blocks(req, 161024, 161024)
     assert len(fresh) == 1
     assert mgr._real_count(req) == 4160
+    assert mgr.get_num_blocks_to_allocate(
+        req, 161025, [], 161024, 161024, 161025
+    ) == 0
     with pytest.raises(RuntimeError, match="active suffix exceeded reserve"):
-        mgr.get_num_blocks_to_allocate(
-            req, 161025, [], 161024, 161024, 161025
-        )
+        mgr.allocate_new_blocks(req, 161025, 161025)
 
 
 def test_runtime_plan_is_strict():
