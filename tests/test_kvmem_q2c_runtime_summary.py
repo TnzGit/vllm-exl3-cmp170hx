@@ -27,6 +27,13 @@ def _plan():
     }
 
 
+def _boot():
+    return {
+        "classification": "Q2C_DUAL_POOL_BOOT_GO",
+        "dual_pool_boot_gate": True,
+    }
+
+
 def _worker(layer):
     return {
         "layer": layer, "phase": "shrunk", "logical_pages": 12,
@@ -69,7 +76,7 @@ def test_q2c_runtime_summary_go():
         "usage": {"completion_tokens": 32}, "text": "ok",
     }
     out = mod.summarize(
-        response, _scheduler(), [_worker("a"), _worker("b")], _plan()
+        response, _scheduler(), [_worker("a"), _worker("b")], _plan(), _boot()
     )
     assert out["classification"] == "Q2C_FROZEN_PLAN_OWNERSHIP_SEMANTIC_GO"
     assert out["q2c_runtime_go"] is True
@@ -88,7 +95,9 @@ def test_q2c_runtime_summary_rejects_peak_above_cap():
     response = {"target_codes_in_order": True, "finish_reason": "stop"}
     sched = _scheduler()
     sched[0]["peak_real_pages"] = 7
-    out = mod.summarize(response, sched, [_worker("a"), _worker("b")], _plan())
+    out = mod.summarize(
+        response, sched, [_worker("a"), _worker("b")], _plan(), _boot()
+    )
     assert out["classification"] == "Q2C_SCHEDULER_SHRINK_NO_GO"
     assert out["q2c_runtime_go"] is False
 
@@ -97,7 +106,26 @@ def test_q2c_runtime_summary_rejects_no_boundary():
     mod = _load()
     response = {"target_codes_in_order": True, "finish_reason": "stop"}
     out = mod.summarize(
-        response, _scheduler()[:1], [_worker("a"), _worker("b")], _plan()
+        response, _scheduler()[:1], [_worker("a"), _worker("b")], _plan(), _boot()
     )
     assert out["classification"] == "Q2C_SCHEDULER_SHRINK_NO_GO"
     assert out["q2c_runtime_go"] is False
+
+
+def test_q2c_runtime_summary_rejects_missing_dual_pool_boot_evidence():
+    mod = _load()
+    response = {
+        "target_codes_in_order": True,
+        "finish_reason": "stop",
+        "usage": {"completion_tokens": 32},
+    }
+    bad_boot = {
+        "classification": "Q2C_DUAL_POOL_BOOT_NO_GO",
+        "dual_pool_boot_gate": False,
+    }
+    out = mod.summarize(
+        response, _scheduler(), [_worker("a"), _worker("b")], _plan(), bad_boot
+    )
+    assert out["classification"] == "Q2C_DUAL_POOL_BOOT_EVIDENCE_NO_GO"
+    assert out["q2c_runtime_go"] is False
+    assert out["dual_pool_boot_gate"] is False
