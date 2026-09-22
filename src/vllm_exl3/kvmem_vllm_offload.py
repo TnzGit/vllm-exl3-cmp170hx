@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
 import time
 from typing import Any, Sequence
 
@@ -24,6 +25,7 @@ class TransferObservation:
     submit_seconds: float = 0.0
     wait_seconds: float = 0.0
     finish_seconds: float = 0.0
+    verified_pages: int = 0
 
     @property
     def event_gib_s(self) -> float:
@@ -231,16 +233,24 @@ class VllmCPUPageBacking:
             raise RuntimeError("CPU offload worker rejected store transfer")
         submit_seconds = time.perf_counter() - submit_start
 
-        wait_start = time.perf_counter()
-        self.worker.wait({job_id})
-        wait_seconds = time.perf_counter() - wait_start
-        finish_start = time.perf_counter()
-        result = self._finished(job_id)
-        self.manager.complete_store(
-            store_keys,
-            self.req_context,
-            success=True,
-        )
+        try:
+            wait_start = time.perf_counter()
+            self.worker.wait({job_id})
+            wait_seconds = time.perf_counter() - wait_start
+            finish_start = time.perf_counter()
+            result = self._finished(job_id)
+            self.manager.complete_store(
+                store_keys,
+                self.req_context,
+                success=True,
+            )
+        except BaseException:
+            self.manager.complete_store(
+                store_keys,
+                self.req_context,
+                success=False,
+            )
+            raise
         finish_seconds = time.perf_counter() - finish_start
         return TransferObservation(
             job_id=job_id,
@@ -294,12 +304,20 @@ class VllmCPUPageBacking:
             raise RuntimeError("CPU offload worker rejected load transfer")
         submit_seconds = time.perf_counter() - submit_start
 
-        wait_start = time.perf_counter()
-        self.worker.wait({job_id})
-        wait_seconds = time.perf_counter() - wait_start
-        finish_start = time.perf_counter()
-        result = self._finished(job_id)
-        self.manager.complete_load(keys, self.req_context)
+        verified_pages = 0
+        try:
+            wait_start = time.perf_counter()
+            self.worker.wait({job_id})
+            wait_seconds = time.perf_counter() - wait_start
+            finish_start = time.perf_counter()
+            result = self._finished(job_id)
+            verified_pages = self._verify_direct_load(
+                logical_pages,
+                destination_gpu_pages,
+                cpu_spec,
+            )
+        finally:
+            self.manager.complete_load(keys, self.req_context)
         finish_seconds = time.perf_counter() - finish_start
         return TransferObservation(
             job_id=job_id,
@@ -310,7 +328,57 @@ class VllmCPUPageBacking:
             submit_seconds=submit_seconds,
             wait_seconds=wait_seconds,
             finish_seconds=finish_seconds,
+            verified_pages=verified_pages,
         )
+
+    def _verify_direct_load(
+        self,
+        logical_pages: Sequence[int],
+        destination_gpu_pages: Sequence[int],
+        cpu_spec: Any,
+    ) -> int:
+        raw_limit = os.environ.get(
+            "VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE"
+        )
+        if raw_limit is None:
+            return 0
+        try:
+            logical_limit = int(raw_limit)
+        except ValueError as exc:
+            raise RuntimeError(
+                "VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE must be an integer"
+            ) from exc
+        selected = [
+            index for index, page in enumerate(logical_pages)
+            if int(page) <= logical_limit
+        ]
+        if not selected:
+            return 0
+
+        import torch
+
+        load_handler = self.worker._load_handler
+        if len(load_handler.src_tensors) != 1 or len(load_handler.dst_tensors) != 1:
+            raise RuntimeError("Q2E direct-load oracle requires one backing tensor")
+        cpu_ids = torch.tensor(
+            [int(cpu_spec.block_ids[index]) for index in selected],
+            dtype=torch.int64,
+        )
+        gpu_ids = torch.tensor(
+            [int(destination_gpu_pages[index]) for index in selected],
+            dtype=torch.int64,
+            device=load_handler.dst_tensors[0].device,
+        )
+        expected = load_handler.src_tensors[0].index_select(0, cpu_ids)
+        actual = load_handler.dst_tensors[0].index_select(0, gpu_ids).cpu()
+        if not torch.equal(actual, expected):
+            mismatch = torch.nonzero(actual != expected, as_tuple=False)[0]
+            row = int(mismatch[0].item())
+            raise RuntimeError(
+                "Q2E direct-load byte oracle mismatch for logical page "
+                f"{int(logical_pages[selected[row]])}"
+            )
+        return len(selected)
 
     def close(self) -> None:
         if not self._closed:

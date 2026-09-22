@@ -82,6 +82,7 @@ def summarize(
         "published_pages_total",
         "cpu_roundtrip_pages_total",
         "cpu_roundtrip_exact",
+        "direct_load_verified_pages_total",
         "d2h_bytes_total",
         "h2d_bytes_total",
         "read_table_mode",
@@ -132,7 +133,13 @@ def summarize(
         and all(row["io_mode"] == expected_io_mode for row in events)
         and (
             expected_io_mode != "direct_dedicated_slots"
-            or all(float(row["d2d_copy_submit_seconds"]) == 0.0 for row in events)
+            or (
+                all(float(row["d2d_copy_submit_seconds"]) == 0.0 for row in events)
+                and all(
+                    int(row["direct_load_verified_pages_total"]) > 0
+                    for row in events
+                )
+            )
         )
     )
     capacity_gate = bool(
@@ -379,6 +386,13 @@ def summarize(
         ),
         "min_final_roundtrip_pages_per_layer": min(
             (int(row["cpu_roundtrip_pages_total"]) for row in final_by_layer.values()),
+            default=0,
+        ),
+        "min_final_direct_load_verified_pages_per_layer": min(
+            (
+                int(row["direct_load_verified_pages_total"])
+                for row in final_by_layer.values()
+            ),
             default=0,
         ),
         "scheduler_assign_events": len(assignments),

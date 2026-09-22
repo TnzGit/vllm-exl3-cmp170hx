@@ -159,6 +159,7 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "h2d_jobs": 0,
         "roundtrip_pages": 0,
         "roundtrip_exact": True,
+        "direct_load_verified_pages": 0,
         "trace_records": 0,
         "trace_bytes": 0,
         "trace_truncated": False,
@@ -314,6 +315,7 @@ def _publish_completed(
         state["h2d_bytes"] += int(restore.transfer_bytes)
         state["h2d_jobs"] += int(restore.job_id != 0)
         _accumulate_transfer(state, "h2d", restore)
+        state["direct_load_verified_pages"] += int(restore.verified_pages)
         restored = kv_cache.index_select(0, read_ids) if direct_io else staging[:n]
         exact = _bits_equal(restored, source)
         state["roundtrip_pages"] += n
@@ -387,6 +389,7 @@ def _stage_history(
         state["h2d_bytes"] += int(obs.transfer_bytes)
         state["h2d_jobs"] += int(obs.job_id != 0)
         _accumulate_transfer(state, "h2d", obs)
+        state["direct_load_verified_pages"] += int(obs.verified_pages)
     else:
         for start in range(0, len(missing), chunk_size):
             pages = missing[start:start + chunk_size]
@@ -396,6 +399,7 @@ def _stage_history(
             state["h2d_bytes"] += int(obs.transfer_bytes)
             state["h2d_jobs"] += int(obs.job_id != 0)
             _accumulate_transfer(state, "h2d", obs)
+            state["direct_load_verified_pages"] += int(obs.verified_pages)
             read_ids = torch.tensor(
                 [read_base + slot for slot in slots],
                 dtype=torch.int64,
@@ -623,6 +627,9 @@ def run_streaming_runtime(
         "selected_history_pages": selected_history_total,
         "cpu_roundtrip_pages_total": int(state["roundtrip_pages"]),
         "cpu_roundtrip_exact": bool(state["roundtrip_exact"]),
+        "direct_load_verified_pages_total": int(
+            state["direct_load_verified_pages"]
+        ),
         "d2h_bytes_total": int(state["d2h_bytes"]),
         "d2h_jobs_total": int(state["d2h_jobs"]),
         "h2d_bytes_total": int(state["h2d_bytes"]),

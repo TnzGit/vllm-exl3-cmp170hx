@@ -51,6 +51,7 @@ def _worker():
                 "published_pages_this_forward": published_this,
                 "cpu_roundtrip_pages_total": published,
                 "cpu_roundtrip_exact": True,
+                "direct_load_verified_pages_total": 0,
                 "d2h_bytes_total": published * 32768,
                 "h2d_bytes_total": published * 32768,
                 "d2h_jobs_total": published,
@@ -241,6 +242,7 @@ def test_streaming_summary_gates_expected_direct_io_mode():
             row["staging_role"] = "allocated_unused"
         if row["event"] == "q2d_streaming_runtime":
             row["d2d_copy_submit_seconds"] = 0.0
+            row["direct_load_verified_pages_total"] = 1
     result = _load().summarize(
         _response(), rows, _scheduler(), _plan(), None,
         "direct_dedicated_slots",
