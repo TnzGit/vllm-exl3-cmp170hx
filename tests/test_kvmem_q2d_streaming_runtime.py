@@ -14,12 +14,11 @@ from vllm_exl3.kvmem_q2d_streaming_worker import (
     _CUMULATIVE_TIMING_FIELDS,
     _bits_equal,
     _direct_io_enabled,
-    _history_pages_from_selected,
     _layer_id,
     _logical_write_ids,
-    _mapped_pages_and_physical,
-    _selected_page_tensor,
+    _prepare_forward_table,
     _stage_history,
+    _update_dynamic_table,
 )
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
 from vllm_exl3.kvmem_vllm_offload import TransferObservation
@@ -150,27 +149,32 @@ def test_worker_write_partition_and_bit_comparison_are_strict():
     assert not _bits_equal(left, right)
 
 
-def test_selection_and_table_helpers_preserve_ordered_mapping():
-    selected = torch.tensor(
-        [
-            [95, -1, 16, 95],
-            [160, 31, 32, -1],
-        ],
-        dtype=torch.int32,
+def test_persistent_dynamic_table_applies_deltas_and_forward_write_view():
+    table = torch.full((1, 16), -1, dtype=torch.int32)
+    _update_dynamic_table(
+        table,
+        mapped_pages=[1, 2, 5],
+        physical_pages=[129, 130, 133],
     )
-    current_map = {1: 7, 5: 8}
-    unique_pages = _selected_page_tensor(selected, 16).tolist()
-    history = _history_pages_from_selected(unique_pages, current_map)
-    assert history == [2, 10]
-    pages, physical = _mapped_pages_and_physical(
-        history,
-        [1, 5],
-        current_map,
-        {2: 3, 10: 4},
-        128,
+    _update_dynamic_table(
+        table,
+        clear_pages=[2],
+        mapped_pages=[3],
+        physical_pages=[131],
     )
-    assert pages == [1, 2, 5, 10]
-    assert physical == [7, 131, 8, 132]
+    assert table[0, [1, 2, 3, 5]].tolist() == [129, -1, 131, 133]
+
+    state = {
+        "dynamic_table": table,
+        "current_write_pages": [1, 4],
+        "logical_to_slot": {1: 7, 5: 5},
+    }
+    table[0, 1] = 9
+    table[0, 4] = 10
+    result = _prepare_forward_table(state, [6, 7], [11, 12], 128)
+    assert result is table
+    assert table[0, [1, 4, 6, 7]].tolist() == [135, -1, 11, 12]
+    assert state["current_write_pages"] == [6, 7]
 
 
 def test_direct_io_flag_is_strict(monkeypatch):
@@ -200,6 +204,8 @@ def test_direct_stage_history_uses_one_arbitrary_destination_job():
         "logical_to_slot": {},
         "slot_to_logical": [None] * 4,
         "slot_generations": [0] * 4,
+        "dynamic_table": torch.full((1, 32), -1, dtype=torch.int32),
+        "current_write_pages": [],
         "last_use": {},
         "clock": 0,
         "peak_slots": 0,
@@ -229,6 +235,7 @@ def test_direct_stage_history_uses_one_arbitrary_destination_job():
     )
     assert result[0] == 3
     assert backing.calls == [([10, 11, 12], [128, 129, 130])]
+    assert state["dynamic_table"][0, [10, 11, 12]].tolist() == [128, 129, 130]
     assert state["h2d_jobs"] == 1
     assert state["d2d_copy_submit_seconds_total"] == 0.0
 

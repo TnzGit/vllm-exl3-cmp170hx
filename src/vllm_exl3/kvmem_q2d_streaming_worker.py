@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import heapq
 import json
 import os
 from pathlib import Path
@@ -147,6 +146,13 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "logical_to_slot": {},
         "slot_to_logical": [None] * read_pages,
         "slot_generations": [0] * read_pages,
+        "dynamic_table": torch.full(
+            (1, int(plan["cpu_page_count"])),
+            -1,
+            dtype=torch.int32,
+            device=dedicated.device,
+        ),
+        "current_write_pages": [],
         "last_use": {},
         "clock": 0,
         "peak_slots": 0,
@@ -218,45 +224,52 @@ def _logical_write_ids(
     return physical
 
 
-def _selected_page_tensor(
-    batch_selected: torch.Tensor,
-    page_tokens: int,
-) -> torch.Tensor:
-    """Return ordered unique logical pages selected by one query batch."""
-    valid_selected = batch_selected[batch_selected >= 0]
-    if valid_selected.numel() == 0:
-        return torch.empty(0, dtype=torch.int64, device=batch_selected.device)
-    pages = torch.div(
-        valid_selected.to(torch.int64),
-        page_tokens,
-        rounding_mode="floor",
-    )
-    return torch.unique(pages, sorted=True)
+def _update_dynamic_table(
+    table: torch.Tensor,
+    *,
+    clear_pages: Sequence[int] = (),
+    mapped_pages: Sequence[int] = (),
+    physical_pages: Sequence[int] = (),
+) -> None:
+    """Apply a bounded mapping delta to the persistent logical block table."""
+    if len(mapped_pages) != len(physical_pages):
+        raise ValueError("Q2E dynamic table mapping lengths disagree")
+    row = table[0]
+    if clear_pages:
+        clear = torch.tensor(clear_pages, dtype=torch.int64, device=table.device)
+        row.index_fill_(0, clear, -1)
+    if mapped_pages:
+        logical = torch.tensor(mapped_pages, dtype=torch.int64, device=table.device)
+        physical = torch.tensor(
+            physical_pages, dtype=table.dtype, device=table.device
+        )
+        row.index_copy_(0, logical, physical)
 
 
-def _history_pages_from_selected(
-    selected_pages: Sequence[int], current_map: dict[int, int]
-) -> list[int]:
-    """Filter ordered unique selected pages down to CPU-backed history."""
-    return [int(page) for page in selected_pages if int(page) not in current_map]
-
-
-def _mapped_pages_and_physical(
-    history_pages: Sequence[int],
+def _prepare_forward_table(
+    state: dict[str, Any],
     current_pages: Sequence[int],
-    current_map: dict[int, int],
-    logical_to_slot: dict[int, int],
+    current_write_ids: Sequence[int],
     read_base: int,
-) -> tuple[list[int], list[int]]:
-    """Merge disjoint ordered WRITE/READ mappings without set sorting."""
-    mapped_pages = list(heapq.merge(current_pages, history_pages))
-    physical = [
-        current_map[page]
-        if page in current_map
-        else read_base + int(logical_to_slot[page])
-        for page in mapped_pages
-    ]
-    return mapped_pages, physical
+) -> torch.Tensor:
+    """Retire the previous WRITE view and install this forward's WRITE view."""
+    previous = [int(page) for page in state["current_write_pages"]]
+    resident = state["logical_to_slot"]
+    restore_pages = [page for page in previous if page in resident]
+    clear_pages = [page for page in previous if page not in resident]
+    _update_dynamic_table(
+        state["dynamic_table"],
+        clear_pages=clear_pages,
+        mapped_pages=restore_pages,
+        physical_pages=[read_base + int(resident[page]) for page in restore_pages],
+    )
+    _update_dynamic_table(
+        state["dynamic_table"],
+        mapped_pages=current_pages,
+        physical_pages=current_write_ids,
+    )
+    state["current_write_pages"] = [int(page) for page in current_pages]
+    return state["dynamic_table"]
 
 
 def _validate_write_mapping(
@@ -373,6 +386,12 @@ def _publish_completed(
             state["d2d_copy_submit_seconds_total"] += (
                 time.perf_counter() - copy_start
             )
+        _update_dynamic_table(
+            state["dynamic_table"],
+            clear_pages=victims,
+            mapped_pages=new_pages,
+            physical_pages=[read_base + slot for slot in new_slots],
+        )
         _touch(state, chunk)
         state["published"].update(chunk)
         trace_start = time.perf_counter()
@@ -462,6 +481,13 @@ def _stage_history(
             state["d2d_copy_submit_seconds_total"] += (
                 time.perf_counter() - copy_start
             )
+    current_write_pages = set(int(page) for page in state["current_write_pages"])
+    _update_dynamic_table(
+        state["dynamic_table"],
+        clear_pages=[page for page in victims if page not in current_write_pages],
+        mapped_pages=missing,
+        physical_pages=[read_base + slot for slot in local_slots],
+    )
     _touch(state, history_pages)
     state["peak_read_slots"] = max(
         int(state["peak_read_slots"]), len(state["logical_to_slot"])
@@ -530,7 +556,18 @@ def run_streaming_runtime(
     cap = int(plan["physical_page_count"])
     read_cap = int(plan["read_cache_page_count"])
     read_base = int(plan["write_page_count"])
-    current_map = dict(zip(current_pages, current_write_ids.cpu().tolist(), strict=True))
+    current_write_id_list = [int(page) for page in current_write_ids.cpu().tolist()]
+    current_map = dict(zip(current_pages, current_write_id_list, strict=True))
+    if state["dynamic_table"].dtype != main_metadata.block_table.dtype:
+        raise RuntimeError("Q2E dynamic table dtype differs from scheduler block table")
+    table_refresh_start = time.perf_counter()
+    table = _prepare_forward_table(
+        state,
+        current_pages,
+        current_write_id_list,
+        read_base,
+    )
+    table_forward_refresh_wall = time.perf_counter() - table_refresh_start
     batch_target = int(plan["query_row_batch"])
     start = 0
     split_calls = 0
@@ -542,10 +579,7 @@ def run_streaming_runtime(
     selection_tensor_wall = 0.0
     selection_cpu_filter_wall = 0.0
     stage_history_wall = 0.0
-    table_build_wall = 0.0
-    table_allocate_wall = 0.0
-    table_mapping_wall = 0.0
-    table_index_copy_wall = 0.0
+    table_build_wall = table_forward_refresh_wall
     attention_submit_wall = 0.0
     while start < num_tokens:
         plan_start = time.perf_counter()
@@ -554,13 +588,21 @@ def run_streaming_runtime(
             end = start + size
             batch_selected = selected[start:end]
             selection_tensor_start = time.perf_counter()
-            unique_pages = _selected_page_tensor(batch_selected, page_tokens)
+            valid = batch_selected >= 0
+            pages_tensor = torch.div(
+                batch_selected.clamp_min(0).to(torch.int64),
+                page_tokens,
+                rounding_mode="floor",
+            )[valid]
+            unique_pages = torch.unique(pages_tensor)
             selection_tensor_wall += time.perf_counter() - selection_tensor_start
             selection_cpu_start = time.perf_counter()
-            selected_pages = unique_pages.cpu().tolist()
-            history_pages = _history_pages_from_selected(
-                selected_pages, current_map
+            selected_pages = sorted(
+                int(page) for page in unique_pages.cpu().tolist()
             )
+            history_pages = [
+                page for page in selected_pages if page not in current_map
+            ]
             selection_cpu_filter_wall += time.perf_counter() - selection_cpu_start
             working = len(history_pages) + len(current_pages)
             if working <= cap and len(history_pages) <= read_cap:
@@ -593,38 +635,6 @@ def run_streaming_runtime(
         state["trace_bytes"] += record_bytes if written else 0
         state["trace_truncated"] = bool(state["trace_truncated"] or truncated)
         state["trace_wall_seconds_total"] += time.perf_counter() - trace_start
-        table_start = time.perf_counter()
-        table_allocate_start = time.perf_counter()
-        table = torch.full(
-            (1, int(plan["cpu_page_count"])),
-            -1,
-            dtype=main_metadata.block_table.dtype,
-            device=main_metadata.block_table.device,
-        )
-        table_allocate_wall += time.perf_counter() - table_allocate_start
-        table_mapping_start = time.perf_counter()
-        mapped_pages, physical = _mapped_pages_and_physical(
-            history_pages,
-            current_pages,
-            current_map,
-            state["logical_to_slot"],
-            read_base,
-        )
-        mapped_tensor = torch.tensor(
-            mapped_pages, dtype=torch.int64, device=table.device
-        )
-        physical_tensor = torch.tensor(
-            physical, dtype=table.dtype, device=table.device
-        )
-        table_mapping_wall += time.perf_counter() - table_mapping_start
-        table_index_start = time.perf_counter()
-        table[0].index_copy_(
-            0,
-            mapped_tensor,
-            physical_tensor,
-        )
-        table_index_copy_wall += time.perf_counter() - table_index_start
-        table_build_wall += time.perf_counter() - table_start
         end = start + size
         attention_start = time.perf_counter()
         qsa_sparse_paged_attention(
@@ -697,9 +707,7 @@ def run_streaming_runtime(
         "selection_cpu_filter_wall_seconds": selection_cpu_filter_wall,
         "stage_history_wall_seconds": stage_history_wall,
         "table_build_wall_seconds": table_build_wall,
-        "table_allocate_wall_seconds": table_allocate_wall,
-        "table_mapping_wall_seconds": table_mapping_wall,
-        "table_index_copy_wall_seconds": table_index_copy_wall,
+        "table_forward_refresh_wall_seconds": table_forward_refresh_wall,
         "attention_submit_wall_seconds": attention_submit_wall,
         **timing_delta,
         "trace_records_total": int(state["trace_records"]),
