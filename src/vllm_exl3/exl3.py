@@ -900,6 +900,8 @@ def direct_fill_stats() -> dict[str, Any]:
 # Diagnostic-only loader timing. Disabled unless VLLM_EXL3_LOAD_TRACE_PATH is
 # set, so the production path pays only one environment lookup at module load.
 _LOAD_TRACE_PATH = os.environ.get("VLLM_EXL3_LOAD_TRACE_PATH", "").strip()
+_PINNED_STAGE_AB = os.environ.get("VLLM_EXL3_PINNED_STAGE_AB", "0") == "1"
+_PINNED_TRELLIS_STAGE: "torch.Tensor | None" = None
 _LOAD_TIMING_STATS: dict[str, Any] = {
     "GENERIC_COPY_CALLS": 0,
     "GENERIC_COPY_BYTES": 0,
@@ -910,6 +912,15 @@ _LOAD_TIMING_STATS: dict[str, Any] = {
     "DIRECT_TRELLIS_COPY_CALLS": 0,
     "DIRECT_TRELLIS_COPY_BYTES": 0,
     "DIRECT_TRELLIS_COPY_WALL_S": 0.0,
+    "DIRECT_TRELLIS_CONTROL_CALLS": 0,
+    "DIRECT_TRELLIS_CONTROL_BYTES": 0,
+    "DIRECT_TRELLIS_CONTROL_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PINNED_CALLS": 0,
+    "DIRECT_TRELLIS_PINNED_BYTES": 0,
+    "DIRECT_TRELLIS_PINNED_ALLOC_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PINNED_CPU_STAGE_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PINNED_H2D_WALL_S": 0.0,
+    "DIRECT_TRELLIS_PINNED_TOTAL_WALL_S": 0.0,
 }
 _LOAD_TRACE_STARTED = False
 _LOAD_TRACE_FINAL_WRITTEN = False
@@ -1098,6 +1109,22 @@ def _copy_weight_blocking(dest: "torch.Tensor", src: "torch.Tensor") -> None:
     _madv_dontneed_cpu_tensor(src)
 
 
+def _pinned_trellis_stage_view(src: "torch.Tensor") -> tuple["torch.Tensor", float]:
+    """Return a reusable flat pinned staging view large enough for src."""
+    global _PINNED_TRELLIS_STAGE
+    numel = int(src.numel())
+    alloc_wall = 0.0
+    if (
+        _PINNED_TRELLIS_STAGE is None
+        or int(_PINNED_TRELLIS_STAGE.numel()) < numel
+    ):
+        t0 = time.perf_counter()
+        _PINNED_TRELLIS_STAGE = torch.empty(
+            numel, dtype=torch.int16, device="cpu", pin_memory=True
+        )
+        alloc_wall = time.perf_counter() - t0
+    return _PINNED_TRELLIS_STAGE[:numel].view(src.shape), alloc_wall
+
 def _direct_fill_trellis_slot(
     layer: Any,
     proj: str,
@@ -1134,9 +1161,23 @@ def _direct_fill_trellis_slot(
     if not src.is_contiguous():
         src = src.contiguous()
     prep_elapsed = time.perf_counter() - prep_t0
-    copy_t0 = time.perf_counter()
-    arena[idx].copy_(src, non_blocking=False)
-    copy_elapsed = time.perf_counter() - copy_t0
+    use_pinned = _PINNED_STAGE_AB and (int(idx) & 1) == 1
+    pinned_alloc_wall = 0.0
+    pinned_cpu_wall = 0.0
+    pinned_h2d_wall = 0.0
+    if use_pinned:
+        pinned, pinned_alloc_wall = _pinned_trellis_stage_view(src)
+        cpu_t0 = time.perf_counter()
+        pinned.copy_(src, non_blocking=False)
+        pinned_cpu_wall = time.perf_counter() - cpu_t0
+        h2d_t0 = time.perf_counter()
+        arena[idx].copy_(pinned, non_blocking=False)
+        pinned_h2d_wall = time.perf_counter() - h2d_t0
+        copy_elapsed = pinned_cpu_wall + pinned_h2d_wall
+    else:
+        copy_t0 = time.perf_counter()
+        arena[idx].copy_(src, non_blocking=False)
+        copy_elapsed = time.perf_counter() - copy_t0
     _madv_dontneed_cpu_tensor(src)
     _DIRECT_FILL_STATS["DIRECT_FILL_CALLS"] += 1
     _DIRECT_FILL_STATS["DIRECT_FILL_BYTES"] += transient
@@ -1148,6 +1189,17 @@ def _direct_fill_trellis_slot(
         _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_CALLS"] += 1
         _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_BYTES"] += transient
         _LOAD_TIMING_STATS["DIRECT_TRELLIS_COPY_WALL_S"] += copy_elapsed
+        if use_pinned:
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_CALLS"] += 1
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_BYTES"] += transient
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_ALLOC_WALL_S"] += pinned_alloc_wall
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_CPU_STAGE_WALL_S"] += pinned_cpu_wall
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_H2D_WALL_S"] += pinned_h2d_wall
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_PINNED_TOTAL_WALL_S"] += copy_elapsed
+        else:
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_CONTROL_CALLS"] += 1
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_CONTROL_BYTES"] += transient
+            _LOAD_TIMING_STATS["DIRECT_TRELLIS_CONTROL_WALL_S"] += copy_elapsed
 
 
 def _pack_trellis_arenas(layer: Any) -> dict[str, Any]:
