@@ -19,7 +19,7 @@ def test_q2c_preflight_runner_is_cpu_read_only_and_exact_sha_gated():
     assert "Q2C_SCHEDULER_SHRINK_PREFLIGHT_GO" in src
     assert "NUM_SPEC_TOKENS" not in src
     assert "serve_cmp170hx" not in src
-    assert "vllm serve" not in src
+    assert "setsid bash" not in src
     assert "curl" not in src
     assert "patch_vllm" not in src
     assert "cp \"$QSA" not in src
