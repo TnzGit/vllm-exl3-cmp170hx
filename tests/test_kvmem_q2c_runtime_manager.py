@@ -1,1 +1,160 @@
-import json\nfrom pathlib import Path\n\nimport pytest\n\nfrom vllm_exl3.kvmem_qsa_scheduler_runtime import (\n    QSAResidentRuntimeManager,\n    QSAResidentRuntimeSpec,\n    make_qsa_runtime_spec,\n    validate_runtime_plan,\n)\n\n\nclass _Block:\n    def __init__(self, block_id: int, *, is_null: bool = False):\n        self.block_id = block_id\n        self.is_null = is_null\n        self.ref_cnt = 0 if is_null else 1\n        self.block_hash = None\n\n\nclass _Pool:\n    def __init__(self, n: int = 20000):\n        self.null_block = _Block(0, is_null=True)\n        self.free = [_Block(i) for i in range(1, n + 1)]\n        self.freed = []\n\n    def get_new_blocks(self, n: int):\n        assert n <= len(self.free)\n        out = self.free[:n]\n        del self.free[:n]\n        return out\n\n    def free_blocks(self, blocks):\n        rows = list(blocks)\n        assert all(not b.is_null for b in rows)\n        self.freed.extend(rows)\n        self.free.extend(rows)\n\n\ndef _plan():\n    resident = list(range(4096))\n    return {\n        "schema": 1,\n        "mode": "qsa_scheduler_owned_transition",\n        "page_tokens": 16,\n        "resident_pages": resident,\n        "resident_page_count": len(resident),\n        "apply_min_pos": 160000,\n        "active_from_pos": 160000,\n        "active_page0": 10000,\n        "active_reserve_pages": 64,\n        "physical_page_count": 4160,\n    }\n\n\ndef _manager():\n    spec = make_qsa_runtime_spec(_plan())\n    pool = _Pool()\n    mgr = QSAResidentRuntimeManager(\n        spec, block_pool=pool, enable_caching=False, kv_cache_group_id=0,\n        scheduler_block_size=1568, dcp_world_size=1, pcp_world_size=1,\n        needs_kv_cache_zeroing=False,\n    )\n    return spec, pool, mgr\n\n\ndef test_runtime_spec_separates_logical_width_from_bounded_accounting():\n    spec = make_qsa_runtime_spec(_plan())\n    assert isinstance(spec, QSAResidentRuntimeSpec)\n    assert spec.block_size == 16\n    assert spec.page_size_bytes == 32768\n    assert spec.physical_page_cap == 4160\n    assert spec.max_num_blocks_per_req(None, 161000) == 10063\n    assert spec.max_memory_usage_bytes(None) == 4160 * 32768\n    assert spec.prefix_cacheable is False\n\n\ndef test_full_sequence_admission_uses_recycling_peak_not_logical_width():\n    _, _, mgr = _manager()\n    assert mgr.get_num_blocks_to_allocate(\n        "r", 161000, [], 0, 0, 161000, apply_admission_cap=True\n    ) == 4160\n\n\ndef test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(\n    monkeypatch, tmp_path\n):\n    stats = tmp_path / "sched.jsonl"\n    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH", str(stats))\n    _, pool, mgr = _manager()\n    req = "r"\n\n    # The hardware runner pins max_num_batched_tokens=1024 = 64 QSA pages.\n    for processed in range(0, 160000, 1024):\n        mgr.remove_skipped_blocks(req, processed)\n        target = min(processed + 1024, 160000)\n        predicted = mgr.get_num_blocks_to_allocate(\n            req, target, [], processed, processed, target\n        )\n        fresh = mgr.allocate_new_blocks(req, target, target)\n        assert len(fresh) == predicted\n        assert mgr._real_count(req) <= 4160\n\n    # Commit the final historical chunk: all non-sticky history is now null.\n    mgr.remove_skipped_blocks(req, 160000)\n    blocks = mgr.req_to_blocks[req]\n    assert len(blocks) == 10000\n    assert mgr._real_count(req) == 4096\n    assert all(not blocks[i].is_null for i in range(4096))\n    assert all(blocks[i].is_null for i in range(4096, 10000))\n    assert len(pool.freed) == 5904\n    assert mgr._peak_real_pages[req] == 4160\n\n    rows = [json.loads(x) for x in stats.read_text().splitlines()]\n    reclaim = [x for x in rows if x["event"] == "q2c_scheduler_reclaim"]\n    boundary = [x for x in rows if x["event"] == "q2c_scheduler_boundary"]\n    assert sum(x["freed_pages"] for x in reclaim) == 5904\n    assert len(boundary) == 1\n    assert boundary[0]["logical_row_pages"] == 10000\n    assert boundary[0]["real_pages_at_boundary"] == 4096\n    assert boundary[0]["physical_page_cap"] == 4160\n    assert boundary[0]["peak_real_pages"] == 4160\n\n\ndef test_post_boundary_allocation_only_grows_active_reserve():\n    _, _, mgr = _manager()\n    req = "r"\n    for processed in range(0, 160000, 1024):\n        mgr.remove_skipped_blocks(req, processed)\n        target = min(processed + 1024, 160000)\n        mgr.allocate_new_blocks(req, target, target)\n    mgr.remove_skipped_blocks(req, 160000)\n\n    assert mgr.get_num_blocks_to_allocate(\n        req, 161000, [], 160000, 160000, 161000\n    ) == 63\n    fresh = mgr.allocate_new_blocks(req, 161000, 161000)\n    assert len(fresh) == 63\n    assert len(mgr.req_to_blocks[req]) == 10063\n    assert mgr._real_count(req) == 4159\n\n    assert mgr.get_num_blocks_to_allocate(\n        req, 161024, [], 161000, 161000, 161024\n    ) == 1\n    fresh = mgr.allocate_new_blocks(req, 161024, 161024)\n    assert len(fresh) == 1\n    assert mgr._real_count(req) == 4160\n    with pytest.raises(RuntimeError, match="active suffix exceeded reserve"):\n        mgr.get_num_blocks_to_allocate(\n            req, 161025, [], 161024, 161024, 161025\n        )\n\n\ndef test_runtime_plan_is_strict():\n    p = validate_runtime_plan(_plan())\n    assert p["resident_pages"] == tuple(range(4096))\n    bad = dict(_plan(), mode="qsa_cpu_backed_shadow")\n    with pytest.raises(ValueError, match="mode mismatch"):\n        validate_runtime_plan(bad)\n
+import json
+from pathlib import Path
+
+import pytest
+
+from vllm_exl3.kvmem_qsa_scheduler_runtime import (
+    QSAResidentRuntimeManager,
+    QSAResidentRuntimeSpec,
+    make_qsa_runtime_spec,
+    validate_runtime_plan,
+)
+
+
+class _Block:
+    def __init__(self, block_id: int, *, is_null: bool = False):
+        self.block_id = block_id
+        self.is_null = is_null
+        self.ref_cnt = 0 if is_null else 1
+        self.block_hash = None
+
+
+class _Pool:
+    def __init__(self, n: int = 20000):
+        self.null_block = _Block(0, is_null=True)
+        self.free = [_Block(i) for i in range(1, n + 1)]
+        self.freed = []
+
+    def get_new_blocks(self, n: int):
+        assert n <= len(self.free)
+        out = self.free[:n]
+        del self.free[:n]
+        return out
+
+    def free_blocks(self, blocks):
+        rows = list(blocks)
+        assert all(not b.is_null for b in rows)
+        self.freed.extend(rows)
+        self.free.extend(rows)
+
+
+def _plan():
+    resident = list(range(4096))
+    return {
+        "schema": 1,
+        "mode": "qsa_scheduler_owned_transition",
+        "page_tokens": 16,
+        "resident_pages": resident,
+        "resident_page_count": len(resident),
+        "apply_min_pos": 160000,
+        "active_from_pos": 160000,
+        "active_page0": 10000,
+        "active_reserve_pages": 64,
+        "physical_page_count": 4160,
+    }
+
+
+def _manager():
+    spec = make_qsa_runtime_spec(_plan())
+    pool = _Pool()
+    mgr = QSAResidentRuntimeManager(
+        spec, block_pool=pool, enable_caching=False, kv_cache_group_id=0,
+        scheduler_block_size=1568, dcp_world_size=1, pcp_world_size=1,
+        needs_kv_cache_zeroing=False,
+    )
+    return spec, pool, mgr
+
+
+def test_runtime_spec_separates_logical_width_from_bounded_accounting():
+    spec = make_qsa_runtime_spec(_plan())
+    assert isinstance(spec, QSAResidentRuntimeSpec)
+    assert spec.block_size == 16
+    assert spec.page_size_bytes == 32768
+    assert spec.physical_page_cap == 4160
+    assert spec.max_num_blocks_per_req(None, 161000) == 10063
+    assert spec.max_memory_usage_bytes(None) == 4160 * 32768
+    assert spec.prefix_cacheable is False
+
+
+def test_full_sequence_admission_uses_recycling_peak_not_logical_width():
+    _, _, mgr = _manager()
+    assert mgr.get_num_blocks_to_allocate(
+        "r", 161000, [], 0, 0, 161000, apply_admission_cap=True
+    ) == 4160
+
+
+def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
+    monkeypatch, tmp_path
+):
+    stats = tmp_path / "sched.jsonl"
+    monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH", str(stats))
+    _, pool, mgr = _manager()
+    req = "r"
+
+    # The hardware runner pins max_num_batched_tokens=1024 = 64 QSA pages.
+    for processed in range(0, 160000, 1024):
+        mgr.remove_skipped_blocks(req, processed)
+        target = min(processed + 1024, 160000)
+        predicted = mgr.get_num_blocks_to_allocate(
+            req, target, [], processed, processed, target
+        )
+        fresh = mgr.allocate_new_blocks(req, target, target)
+        assert len(fresh) == predicted
+        assert mgr._real_count(req) <= 4160
+
+    # Commit the final historical chunk: all non-sticky history is now null.
+    mgr.remove_skipped_blocks(req, 160000)
+    blocks = mgr.req_to_blocks[req]
+    assert len(blocks) == 10000
+    assert mgr._real_count(req) == 4096
+    assert all(not blocks[i].is_null for i in range(4096))
+    assert all(blocks[i].is_null for i in range(4096, 10000))
+    assert len(pool.freed) == 5904
+    assert mgr._peak_real_pages[req] == 4160
+
+    rows = [json.loads(x) for x in stats.read_text().splitlines()]
+    reclaim = [x for x in rows if x["event"] == "q2c_scheduler_reclaim"]
+    boundary = [x for x in rows if x["event"] == "q2c_scheduler_boundary"]
+    assert sum(x["freed_pages"] for x in reclaim) == 5904
+    assert len(boundary) == 1
+    assert boundary[0]["logical_row_pages"] == 10000
+    assert boundary[0]["real_pages_at_boundary"] == 4096
+    assert boundary[0]["physical_page_cap"] == 4160
+    assert boundary[0]["peak_real_pages"] == 4160
+
+
+def test_post_boundary_allocation_only_grows_active_reserve():
+    _, _, mgr = _manager()
+    req = "r"
+    for processed in range(0, 160000, 1024):
+        mgr.remove_skipped_blocks(req, processed)
+        target = min(processed + 1024, 160000)
+        mgr.allocate_new_blocks(req, target, target)
+    mgr.remove_skipped_blocks(req, 160000)
+
+    assert mgr.get_num_blocks_to_allocate(
+        req, 161000, [], 160000, 160000, 161000
+    ) == 63
+    fresh = mgr.allocate_new_blocks(req, 161000, 161000)
+    assert len(fresh) == 63
+    assert len(mgr.req_to_blocks[req]) == 10063
+    assert mgr._real_count(req) == 4159
+
+    assert mgr.get_num_blocks_to_allocate(
+        req, 161024, [], 161000, 161000, 161024
+    ) == 1
+    fresh = mgr.allocate_new_blocks(req, 161024, 161024)
+    assert len(fresh) == 1
+    assert mgr._real_count(req) == 4160
+    with pytest.raises(RuntimeError, match="active suffix exceeded reserve"):
+        mgr.get_num_blocks_to_allocate(
+            req, 161025, [], 161024, 161024, 161025
+        )
+
+
+def test_runtime_plan_is_strict():
+    p = validate_runtime_plan(_plan())
+    assert p["resident_pages"] == tuple(range(4096))
+    bad = dict(_plan(), mode="qsa_cpu_backed_shadow")
+    with pytest.raises(ValueError, match="mode mismatch"):
+        validate_runtime_plan(bad)
