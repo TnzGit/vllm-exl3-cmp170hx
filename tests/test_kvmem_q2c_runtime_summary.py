@@ -59,12 +59,14 @@ def _scheduler():
             "logical_row_pages": 8, "real_pages_before": 6,
             "real_pages_after": 5, "freed_pages": 1,
             "physical_page_cap": 6, "peak_real_pages": 6,
+            "private_pool_num_blocks": 7, "private_pool_free_blocks": 1,
         },
         {
             "event": "q2c_scheduler_boundary",
             "logical_row_pages": 10, "real_pages_at_boundary": 4,
             "physical_page_cap": 6, "resident_history_pages": 4,
             "active_reserve_pages": 2, "peak_real_pages": 6,
+            "private_pool_num_blocks": 7, "private_pool_free_blocks": 2,
         },
     ]
 
