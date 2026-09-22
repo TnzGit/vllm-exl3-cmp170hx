@@ -50,37 +50,61 @@ class QSAResidentRuntimeSpec(AttentionSpec):
 
 
 class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
-    """Transition from full logical ownership to bounded real GPU pages."""
+    """Progressively reclaim processed nonresident QSA pages.
+
+    The full logical row grows with sequence length. Real GPU ownership is the
+    frozen sticky resident history plus the current unprocessed prefill window;
+    after the transition boundary it is sticky history plus the bounded active
+    suffix. This avoids ever requiring the full 160K history to remain real.
+    """
 
     def __init__(self, kv_cache_spec: QSAResidentRuntimeSpec, **kwargs) -> None:
         kwargs["enable_caching"] = False
         super().__init__(kv_cache_spec, **kwargs)
         self.spec = kv_cache_spec
         self._resident_set = frozenset(int(x) for x in kv_cache_spec.resident_pages)
-        self._shrunk: set[str] = set()
+        self._processed_tokens: dict[str, int] = {}
+        self._boundary_emitted: set[str] = set()
+        self._peak_real_pages: dict[str, int] = {}
 
     def _required_pages(self, num_tokens: int) -> int:
         return cdiv(int(num_tokens), self.block_size)
 
-    def _active_end_page(self, required_pages: int) -> int:
-        limit = self.spec.active_page0 + self.spec.active_reserve_pages
-        if required_pages > limit:
+    def _work_start_page(self, request_id: str) -> int:
+        processed = int(self._processed_tokens.get(request_id, 0))
+        if processed >= self.spec.shrink_from_pos:
+            return self.spec.active_page0
+        return processed // self.block_size
+
+    def _desired_pages(self, request_id: str, required_pages: int) -> list[int]:
+        active_limit = self.spec.active_page0 + self.spec.active_reserve_pages
+        if required_pages > active_limit and self._processed_tokens.get(request_id, 0) >= self.spec.shrink_from_pos:
             raise RuntimeError(
                 "Q2C active suffix exceeded reserve: "
-                f"required_pages={required_pages} limit={limit}"
+                f"required_pages={required_pages} limit={active_limit}"
             )
-        return required_pages
 
-    def _desired_after_shrink(self, required_pages: int) -> list[int]:
-        active_end = self._active_end_page(required_pages)
+        # Frozen sticky pages are retained once they have been allocated.
         hist = [p for p in self.spec.resident_pages if p < required_pages]
-        active = list(range(self.spec.active_page0, active_end))
-        return hist + active
+
+        # Before the frozen query boundary, all not-yet-processed pages in the
+        # current scheduler chunk remain real so causal prefill can read/write
+        # them. Once at the boundary, the active suffix is the only work range.
+        work_start = min(self._work_start_page(request_id), required_pages)
+        work = list(range(work_start, required_pages))
+        return sorted(set(hist).union(work))
 
     def _real_count(self, request_id: str) -> int:
         return sum(
             1 for b in self.req_to_blocks.get(request_id, ()) if not b.is_null
         )
+
+    def _record_peak(self, request_id: str) -> int:
+        value = self._real_count(request_id)
+        self._peak_real_pages[request_id] = max(
+            value, self._peak_real_pages.get(request_id, 0)
+        )
+        return value
 
     def get_num_blocks_to_allocate(
         self,
@@ -92,30 +116,28 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         num_tokens_main_model: int,
         apply_admission_cap: bool = False,
     ) -> int:
-        if request_id not in self._shrunk:
-            return super().get_num_blocks_to_allocate(
-                request_id, num_tokens, new_computed_blocks,
-                total_computed_tokens, num_local_computed_tokens,
-                num_tokens_main_model, apply_admission_cap=apply_admission_cap,
-            )
+        del total_computed_tokens, num_local_computed_tokens, num_tokens_main_model
         assert not new_computed_blocks
-        required = self._required_pages(num_tokens)
-        desired = self._desired_after_shrink(required)
         blocks = self.req_to_blocks.get(request_id, ())
-        missing = 0
-        for idx in desired:
-            if idx >= len(blocks) or blocks[idx].is_null:
-                missing += 1
-        return missing
+
+        if apply_admission_cap:
+            # Full-sequence admission must use the proven recycling peak rather
+            # than the complete logical row. The runner pins max scheduled
+            # tokens to active_reserve_pages * block_size.
+            return max(self.spec.physical_page_cap - self._real_count(request_id), 0)
+
+        required = self._required_pages(num_tokens)
+        desired = self._desired_pages(request_id, required)
+        return sum(
+            1 for idx in desired if idx >= len(blocks) or blocks[idx].is_null
+        )
 
     def allocate_new_blocks(
         self, request_id: str, num_tokens: int, num_tokens_main_model: int
     ) -> list[KVCacheBlock]:
         del num_tokens_main_model
-        if request_id not in self._shrunk:
-            return super().allocate_new_blocks(request_id, num_tokens, num_tokens)
         required = self._required_pages(num_tokens)
-        desired = self._desired_after_shrink(required)
+        desired = self._desired_pages(request_id, required)
         blocks = self.req_to_blocks[request_id]
         if len(blocks) < required:
             blocks.extend([self._null_block] * (required - len(blocks)))
@@ -125,8 +147,16 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             blocks[idx] = block
         if self._record_new_block_ids:
             self.new_block_ids.extend(b.block_id for b in fresh)
-        if self._real_count(request_id) > self.spec.physical_page_cap:
-            raise RuntimeError("Q2C physical page cap exceeded after shrink")
+
+        real = self._record_peak(request_id)
+        # During prefill the current scheduler chunk is allowed in addition to
+        # the eventual physical cap. The runner constrains that chunk to the
+        # same 64-page active reserve, so the actual peak is explicitly logged.
+        hard_peak = self.spec.physical_page_cap + self.spec.active_reserve_pages
+        if real > hard_peak:
+            raise RuntimeError(
+                f"Q2C scheduler real-page peak {real} exceeds guarded peak {hard_peak}"
+            )
         return fresh
 
     def remove_skipped_blocks(
@@ -136,17 +166,21 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         num_prompt_tokens: int | None = None,
     ) -> None:
         del num_prompt_tokens
-        if request_id in self._shrunk:
-            return
-        if processed_computed_tokens < self.spec.shrink_from_pos:
-            return
+        processed = max(0, int(processed_computed_tokens))
+        self._processed_tokens[request_id] = processed
+
         blocks = self.req_to_blocks.get(request_id)
         if not blocks:
             return
+
         before = self._real_count(request_id)
-        hist_end = min(self.spec.active_page0, len(blocks))
+        fully_processed_pages = min(processed // self.block_size, len(blocks))
+        historical_end = min(
+            fully_processed_pages,
+            self.spec.active_page0,
+        )
         freed: list[KVCacheBlock] = []
-        for idx in range(hist_end):
+        for idx in range(historical_end):
             block = blocks[idx]
             if idx in self._resident_set or block.is_null:
                 continue
@@ -154,25 +188,42 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             blocks[idx] = self._null_block
         if freed:
             self.block_pool.free_blocks(reversed(freed))
-        self._shrunk.add(request_id)
-        after = self._real_count(request_id)
-        if after > self.spec.physical_page_cap:
-            raise RuntimeError(
-                f"Q2C transition left {after} real pages above cap "
-                f"{self.spec.physical_page_cap}"
-            )
-        _write_scheduler_event({
-            "event": "q2c_scheduler_shrink",
-            "request_id": request_id,
-            "processed_computed_tokens": int(processed_computed_tokens),
-            "logical_row_pages": len(blocks),
-            "real_pages_before": before,
-            "real_pages_after": after,
-            "freed_pages": len(freed),
-            "physical_page_cap": self.spec.physical_page_cap,
-            "resident_history_pages": len(self.spec.resident_pages),
-            "active_reserve_pages": self.spec.active_reserve_pages,
-        })
+        after = self._record_peak(request_id)
+
+        if freed:
+            _write_scheduler_event({
+                "event": "q2c_scheduler_reclaim",
+                "request_id": request_id,
+                "processed_computed_tokens": processed,
+                "logical_row_pages": len(blocks),
+                "real_pages_before": before,
+                "real_pages_after": after,
+                "freed_pages": len(freed),
+                "physical_page_cap": self.spec.physical_page_cap,
+                "peak_real_pages": self._peak_real_pages.get(request_id, after),
+            })
+
+        if (
+            processed >= self.spec.shrink_from_pos
+            and request_id not in self._boundary_emitted
+        ):
+            if after > self.spec.physical_page_cap:
+                raise RuntimeError(
+                    f"Q2C boundary has {after} real pages above cap "
+                    f"{self.spec.physical_page_cap}"
+                )
+            self._boundary_emitted.add(request_id)
+            _write_scheduler_event({
+                "event": "q2c_scheduler_boundary",
+                "request_id": request_id,
+                "processed_computed_tokens": processed,
+                "logical_row_pages": len(blocks),
+                "real_pages_at_boundary": after,
+                "physical_page_cap": self.spec.physical_page_cap,
+                "resident_history_pages": len(self.spec.resident_pages),
+                "active_reserve_pages": self.spec.active_reserve_pages,
+                "peak_real_pages": self._peak_real_pages.get(request_id, after),
+            })
 
     def add_local_computed_blocks(
         self, request_id: str, new_computed_blocks: Sequence[KVCacheBlock],
@@ -208,7 +259,9 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         blocks = self.req_to_blocks.pop(request_id, [])
         self.num_cached_block.pop(request_id, None)
         self._partial_hit_reqs.pop(request_id, None)
-        self._shrunk.discard(request_id)
+        self._processed_tokens.pop(request_id, None)
+        self._boundary_emitted.discard(request_id)
+        self._peak_real_pages.pop(request_id, None)
         return [b for b in blocks if not b.is_null]
 
 
