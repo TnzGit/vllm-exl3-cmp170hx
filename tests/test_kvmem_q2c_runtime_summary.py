@@ -34,7 +34,10 @@ def _worker(layer):
         "resident_history_pages": 4, "active_real_pages": 2,
         "hole_pages": 6, "hole_unique_ids": 1, "null_block_id": 0,
         "historical_selected": 10, "historical_resident_kept": 4,
-        "historical_selected_dropped": 6, "cpu_published": True,
+        "historical_selected_dropped": 6,
+        "prefill_historical_selected": 100,
+        "prefill_historical_selected_dropped": 20,
+        "cpu_published": True,
         "cpu_restored_after_shrink": True, "cpu_restore_exact": True,
         "d2h_bytes": 4 * 32768, "d2h_jobs": 2,
         "h2d_bytes": 4 * 32768, "h2d_jobs": 2,
@@ -68,7 +71,7 @@ def test_q2c_runtime_summary_go():
     out = mod.summarize(
         response, _scheduler(), [_worker("a"), _worker("b")], _plan()
     )
-    assert out["classification"] == "Q2C_SCHEDULER_OWNERSHIP_SEMANTIC_GO"
+    assert out["classification"] == "Q2C_FROZEN_PLAN_OWNERSHIP_SEMANTIC_GO"
     assert out["q2c_runtime_go"] is True
     assert out["scheduler_shrink_gate"] is True
     assert out["scheduler"]["peak_real_pages"] == 6
