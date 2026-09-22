@@ -413,6 +413,13 @@ def _q2c_run(
                     getattr(layer, "_q2c_staging", torch.empty(0)).numel()
                     * getattr(layer, "_q2c_staging", torch.empty(0)).element_size()
                 ),
+                "private_cache_blocks": int(layer.kv_cache.shape[0]),
+                "private_cache_storage_bytes": int(
+                    layer.kv_cache.untyped_storage().nbytes()
+                ),
+                "private_cache_block_stride_bytes": int(
+                    layer.kv_cache.stride(0) * layer.kv_cache.element_size()
+                ),
             }
         )
 
@@ -532,6 +539,8 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "physical_page_cap",
         "historical_selected_dropped",
         "cpu_restored_after_shrink",
+        "private_cache_storage_bytes",
+        "private_cache_block_stride_bytes",
     )
     missing = [x for x in required if x not in out]
     if missing:
