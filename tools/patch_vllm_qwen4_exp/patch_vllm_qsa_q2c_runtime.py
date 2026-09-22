@@ -83,32 +83,67 @@ def _q2c_stats(payload):
         fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
 
 
-def _q2c_apply_visibility(plan, selected, positions):
-    apply_min = int(plan["apply_min_pos"])
-    active_from = int(plan["active_from_pos"])
-    page_tokens = int(plan["page_tokens"])
+def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
+    """Mask selections whose logical page is already a scheduler null hole.
 
+    This is intentionally driven by actual block-table ownership, not merely
+    by the frozen resident list. Pages in the current unprocessed chunk still
+    have real block IDs and remain visible for causal prefill.
+    """
+    if block_table.ndim != 2 or block_table.shape[0] != 1:
+        raise RuntimeError("Q2C runtime currently requires one request")
+
+    page_tokens = int(plan["page_tokens"])
     pos = positions.to(device=selected.device, dtype=torch.int64)
-    apply_rows = pos >= apply_min
-    if not bool(apply_rows.any().item()):
+    valid = selected >= 0
+    if not bool(valid.any().item()):
+        apply_rows = pos >= int(plan["apply_min_pos"])
         return apply_rows, 0, 0, 0
 
-    valid = selected >= 0
-    historical = selected < active_from
+    # Only pages strictly before the current forward's first page are guaranteed
+    # processed and therefore eligible for progressive reclamation.
+    first_query_page = int(pos.min().item()) // page_tokens if pos.numel() else 0
+    hist_end = min(first_query_page, int(plan["active_page0"]))
+    resident_set = set(int(x) for x in plan["resident_pages"])
+    known_holes = [i for i in range(hist_end) if i not in resident_set]
+
+    null_id = None
+    if known_holes:
+        hole_idx = _q2c_tensor(
+            plan, f"visibility_holes_{hist_end}", known_holes, block_table.device
+        )
+        hole_ids = block_table[0].index_select(0, hole_idx).to(torch.int64)
+        unique = torch.unique(hole_ids)
+        if unique.numel() != 1:
+            raise RuntimeError(
+                "Q2C processed nonresident pages did not collapse to one null block"
+            )
+        null_id = unique[0]
+
     logical = selected.clamp_min(0).to(torch.int64)
     pages = torch.div(logical, page_tokens, rounding_mode="floor")
-    resident_pages = _q2c_tensor(
-        plan, "resident_pages", plan["resident_pages"], selected.device
+    page_ids = block_table[0].index_select(0, pages.reshape(-1)).reshape_as(pages)
+    historical = logical < int(plan["active_from_pos"])
+    drop = (
+        valid & historical & (page_ids == null_id)
+        if null_id is not None
+        else torch.zeros_like(valid)
     )
-    keep_hist = torch.isin(pages, resident_pages)
-    row_mask = apply_rows.unsqueeze(1)
-    drop = row_mask & valid & historical & ~keep_hist
 
-    hist_total = int((row_mask & valid & historical).sum().item())
-    hist_kept = int((row_mask & valid & historical & keep_hist).sum().item())
+    historical_total = int((valid & historical).sum().item())
     dropped = int(drop.sum().item())
+    historical_kept = historical_total - dropped
     selected.masked_fill_(drop, -1)
-    return apply_rows, hist_total, hist_kept, dropped
+
+    apply_rows = pos >= int(plan["apply_min_pos"])
+    if bool((pos < int(plan["apply_min_pos"])).any().item()):
+        layer._q2c_prefill_dropped = int(
+            getattr(layer, "_q2c_prefill_dropped", 0)
+        ) + dropped
+        layer._q2c_prefill_historical = int(
+            getattr(layer, "_q2c_prefill_historical", 0)
+        ) + historical_total
+    return apply_rows, historical_total, historical_kept, dropped
 
 
 def _q2c_table_evidence(layer, plan, block_table, positions):
@@ -311,16 +346,18 @@ def _q2c_run(
         _q2c_restore_history_from_cpu(
             layer, plan, layer.kv_cache, main_metadata.block_table
         )
-        apply_rows, hist_total, hist_kept, dropped = _q2c_apply_visibility(
-            plan, selected, positions
-        )
         if evidence["scheduler_real_pages"] > int(plan["physical_page_count"]):
             raise RuntimeError(
                 "Q2C worker sees scheduler real pages above physical cap: "
                 f'{evidence["scheduler_real_pages"]} > {plan["physical_page_count"]}'
             )
-    else:
-        hist_total = hist_kept = dropped = 0
+
+    # Apply the bounded visibility policy on every forward. Before the frozen
+    # query boundary this masks only pages the scheduler has already reclaimed;
+    # current work pages remain real and visible.
+    apply_rows, hist_total, hist_kept, dropped = _q2c_apply_visibility(
+        layer, plan, selected, positions, main_metadata.block_table
+    )
 
     impl.forward_qsa(
         layer,
@@ -349,6 +386,12 @@ def _q2c_run(
                 "historical_selected": int(hist_total),
                 "historical_resident_kept": int(hist_kept),
                 "historical_selected_dropped": int(dropped),
+                "prefill_historical_selected": int(
+                    getattr(layer, "_q2c_prefill_historical", 0)
+                ),
+                "prefill_historical_selected_dropped": int(
+                    getattr(layer, "_q2c_prefill_dropped", 0)
+                ),
                 "cpu_published": bool(getattr(layer, "_q2c_cpu_published", False)),
                 "cpu_restored_after_shrink": bool(
                     getattr(layer, "_q2c_cpu_restored_after_shrink", False)
