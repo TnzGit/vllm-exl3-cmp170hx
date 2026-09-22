@@ -102,9 +102,49 @@ The transient reference is one staging chunk, not a persistent resident shadow.
 - frozen target codes remain correct and request finishes with `stop`;
 - Xid delta = 0 and installed QSA restores byte-for-byte.
 
-## Non-claims after GO
+## Hardware conclusion
 
-A GO does not yet establish:
+The final CMP170HX qualification used code SHA
+`ccec5bf05229bc1bde6331500f4541b0afc5dac8`. CPU/static gates were
+`24 passed`, the engine reached `/health`, and the 159,533-token request
+completed without OOM, crash, preemption, or Xid.
+
+The ownership substrate passed every mechanical gate:
+
+- one allocation-boundary event at a 9,971-page logical row;
+- 4,099 real scheduler pages at the boundary and at peak, below the 4,160 cap;
+- 5,872 historical pages reclaimed across 120 events;
+- all 12 QSA layers bound to exact 4,161-page dedicated tensors;
+- append-only worker virtual IDs remained in range and resident IDs stayed valid;
+- 128 MiB D2H and 128 MiB H2D per layer, 32 jobs each;
+- CPU restore was byte-exact on all 12 layers;
+- installed QSA restored to its baseline SHA and the machine returned idle.
+
+The frozen semantic gate failed reproducibly. The request emitted only
+`<|im_end|>` and neither target code. The final classification is therefore:
+
+```text
+Q2C_FROZEN_PLAN_SEMANTIC_NO_GO
+```
+
+This result separates mechanism from policy: 16-token dedicated/virtual
+ownership, bounded scheduler occupancy, null-hole reclaim, READ block-table / WRITE
+slot-mapping coexistence, and CPU authority are live-proven. The offline K1B
+resident set is not semantically sufficient when applied progressively during
+prefill. Unlike Q2B, which kept the full physical source through prefill and
+applied the frozen mask only to final query rows, Q2C must hide reclaimed
+nonresident history from later prefill rows. The final run recorded
+1,876,958,640 dropped prefill historical selections, and the target semantics
+collapsed.
+
+Under the fixed 4,160-page cap and frozen resident policy, there is no further
+implementation-only retry justified. A future semantic attempt requires a new
+policy phase, such as causal per-chunk residency/reload, and must be evaluated
+as a new experiment rather than a relaxation of this gate.
+
+## Remaining non-claims
+
+This run does not establish:
 
 - 240K runtime;
 - multi-request concurrency scaling;
