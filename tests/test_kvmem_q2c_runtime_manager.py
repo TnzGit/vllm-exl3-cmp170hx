@@ -11,31 +11,8 @@ from vllm_exl3.kvmem_qsa_scheduler_runtime import (
 )
 
 
-class _Block:
-    def __init__(self, block_id: int, *, is_null: bool = False):
-        self.block_id = block_id
-        self.is_null = is_null
-        self.ref_cnt = 0 if is_null else 1
-        self.block_hash = None
-
-
-class _Pool:
-    def __init__(self, n: int = 20000):
-        self.null_block = _Block(0, is_null=True)
-        self.free = [_Block(i) for i in range(1, n + 1)]
-        self.freed = []
-
-    def get_new_blocks(self, n: int):
-        assert n <= len(self.free)
-        out = self.free[:n]
-        del self.free[:n]
-        return out
-
-    def free_blocks(self, blocks):
-        rows = list(blocks)
-        assert all(not b.is_null for b in rows)
-        self.freed.extend(rows)
-        self.free.extend(rows)
+class _StockPoolSentinel:
+    pass
 
 
 def _plan():
@@ -58,13 +35,13 @@ def _plan():
 
 def _manager():
     spec = make_qsa_runtime_spec(_plan())
-    pool = _Pool()
+    stock = _StockPoolSentinel()
     mgr = QSAResidentRuntimeManager(
-        spec, block_pool=pool, enable_caching=False, kv_cache_group_id=0,
-        scheduler_block_size=1568, dcp_world_size=1, pcp_world_size=1,
-        needs_kv_cache_zeroing=False,
+        spec, block_pool=stock, enable_caching=False, kv_cache_group_id=0,
+        scheduler_block_size=322000, dcp_world_size=1, pcp_world_size=1,
+        needs_kv_cache_zeroing=True,
     )
-    return spec, pool, mgr
+    return spec, stock, mgr
 
 
 def test_runtime_spec_separates_logical_width_from_bounded_accounting():
@@ -76,13 +53,23 @@ def test_runtime_spec_separates_logical_width_from_bounded_accounting():
     assert spec.max_num_blocks_per_req(None, 161000) == 10063
     assert spec.max_memory_usage_bytes(None) == 4160 * 32768
     assert spec.prefix_cacheable is False
+    assert spec.q2c_private_pool is True
+    assert spec.private_pool_num_blocks == 4161
 
 
-def test_full_sequence_admission_uses_recycling_peak_not_logical_width():
-    _, _, mgr = _manager()
+def test_full_sequence_admission_is_private_and_invisible_to_stock_pool():
+    _, stock, mgr = _manager()
+    assert mgr._stock_block_pool is stock
+    assert mgr.block_pool.num_gpu_blocks == 4161
+    assert mgr.block_pool.null_block.block_id == 0
+    assert mgr.block_pool.get_num_free_blocks() == 4160
+    assert mgr._private_num_blocks_to_allocate(
+        "r", 161000, [], True
+    ) == 4160
     assert mgr.get_num_blocks_to_allocate(
         "r", 161000, [], 0, 0, 161000, apply_admission_cap=True
-    ) == 4160
+    ) == 0
+    assert mgr.take_new_block_ids() == []
 
 
 def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
@@ -90,16 +77,19 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
 ):
     stats = tmp_path / "sched.jsonl"
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_SCHED_STATS_PATH", str(stats))
-    _, pool, mgr = _manager()
+    _, _, mgr = _manager()
     req = "r"
 
     # The hardware runner pins max_num_batched_tokens=1024 = 64 QSA pages.
     for processed in range(0, 160000, 1024):
         mgr.remove_skipped_blocks(req, processed)
         target = min(processed + 1024, 160000)
-        predicted = mgr.get_num_blocks_to_allocate(
-            req, target, [], processed, processed, target
+        predicted = mgr._private_num_blocks_to_allocate(
+            req, target, [], False
         )
+        assert mgr.get_num_blocks_to_allocate(
+            req, target, [], processed, processed, target
+        ) == 0
         fresh = mgr.allocate_new_blocks(req, target, target)
         assert len(fresh) == predicted
         assert mgr._real_count(req) <= 4160
@@ -111,7 +101,7 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
     assert mgr._real_count(req) == 4096
     assert all(not blocks[i].is_null for i in range(4096))
     assert all(blocks[i].is_null for i in range(4096, 10000))
-    assert len(pool.freed) == 5904
+    assert mgr.block_pool.get_num_free_blocks() == 64
     assert mgr._peak_real_pages[req] == 4160
 
     rows = [json.loads(x) for x in stats.read_text().splitlines()]
@@ -134,17 +124,23 @@ def test_post_boundary_allocation_only_grows_active_reserve():
         mgr.allocate_new_blocks(req, target, target)
     mgr.remove_skipped_blocks(req, 160000)
 
+    assert mgr._private_num_blocks_to_allocate(
+        req, 161000, [], False
+    ) == 63
     assert mgr.get_num_blocks_to_allocate(
         req, 161000, [], 160000, 160000, 161000
-    ) == 63
+    ) == 0
     fresh = mgr.allocate_new_blocks(req, 161000, 161000)
     assert len(fresh) == 63
     assert len(mgr.req_to_blocks[req]) == 10063
     assert mgr._real_count(req) == 4159
 
+    assert mgr._private_num_blocks_to_allocate(
+        req, 161024, [], False
+    ) == 1
     assert mgr.get_num_blocks_to_allocate(
         req, 161024, [], 161000, 161000, 161024
-    ) == 1
+    ) == 0
     fresh = mgr.allocate_new_blocks(req, 161024, 161024)
     assert len(fresh) == 1
     assert mgr._real_count(req) == 4160
@@ -152,6 +148,9 @@ def test_post_boundary_allocation_only_grows_active_reserve():
         mgr.get_num_blocks_to_allocate(
             req, 161025, [], 161024, 161024, 161025
         )
+    assert mgr.block_pool.get_num_free_blocks() == 0
+    mgr.free(req)
+    assert mgr.block_pool.get_num_free_blocks() == 4160
 
 
 def test_runtime_plan_is_strict():
