@@ -20,6 +20,9 @@ def test_q2c_runtime_runner_contract():
     assert "VLLM_QWEN_KVMEM_Q2C_WORKER_STATS_PATH" in src
     assert "VLLM_KV_CACHE_LAYOUT=BLHNC" in src
     assert "ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0" in src
+    assert 'MAX_BATCHED="${K1Q2C_MAX_NUM_BATCHED_TOKENS:-1024}"' in src
+    assert 'MAX_NUM_BATCHED_TOKENS="$MAX_BATCHED"' in src
+    assert 'requires max-num-batched-tokens=1024' in src
     assert "q2c_runtime_summary.json" in src
     assert "restore_qsa" in src
     assert "qsa_sha256_after" in src
