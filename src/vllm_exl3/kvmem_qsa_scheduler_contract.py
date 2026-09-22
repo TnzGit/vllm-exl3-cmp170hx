@@ -107,6 +107,10 @@ def make_qsa_resident_contract_spec(
 
 
 def register_qsa_resident_contract() -> None:
+    # vLLM 0.29 treats any non-empty registry as initialized. Registering an
+    # out-of-tree spec first would therefore suppress all built-in registrations.
+    # Initialize built-ins before adding the Q2C probe type.
+    KVCacheSpecRegistry._ensure_registered()
     KVCacheSpecRegistry.register(
         QSAResidentContractSpec,
         QSAResidentRegistryProbeManager,
