@@ -14,8 +14,11 @@ from vllm_exl3.kvmem_q2d_streaming_worker import (
     _CUMULATIVE_TIMING_FIELDS,
     _bits_equal,
     _direct_io_enabled,
+    _history_pages_from_selected,
     _layer_id,
     _logical_write_ids,
+    _mapped_pages_and_physical,
+    _selected_page_tensor,
     _stage_history,
 )
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many
@@ -145,6 +148,29 @@ def test_worker_write_partition_and_bit_comparison_are_strict():
     assert _bits_equal(left, right)
     right[0] = 2.0
     assert not _bits_equal(left, right)
+
+
+def test_selection_and_table_helpers_preserve_ordered_mapping():
+    selected = torch.tensor(
+        [
+            [95, -1, 16, 95],
+            [160, 31, 32, -1],
+        ],
+        dtype=torch.int32,
+    )
+    current_map = {1: 7, 5: 8}
+    unique_pages = _selected_page_tensor(selected, 16).tolist()
+    history = _history_pages_from_selected(unique_pages, current_map)
+    assert history == [2, 10]
+    pages, physical = _mapped_pages_and_physical(
+        history,
+        [1, 5],
+        current_map,
+        {2: 3, 10: 4},
+        128,
+    )
+    assert pages == [1, 2, 5, 10]
+    assert physical == [7, 131, 8, 132]
 
 
 def test_direct_io_flag_is_strict(monkeypatch):

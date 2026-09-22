@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 from pathlib import Path
@@ -215,6 +216,47 @@ def _logical_write_ids(
     ):
         raise RuntimeError("Q2D current logical page is outside WRITE partition")
     return physical
+
+
+def _selected_page_tensor(
+    batch_selected: torch.Tensor,
+    page_tokens: int,
+) -> torch.Tensor:
+    """Return ordered unique logical pages selected by one query batch."""
+    valid_selected = batch_selected[batch_selected >= 0]
+    if valid_selected.numel() == 0:
+        return torch.empty(0, dtype=torch.int64, device=batch_selected.device)
+    pages = torch.div(
+        valid_selected.to(torch.int64),
+        page_tokens,
+        rounding_mode="floor",
+    )
+    return torch.unique(pages, sorted=True)
+
+
+def _history_pages_from_selected(
+    selected_pages: Sequence[int], current_map: dict[int, int]
+) -> list[int]:
+    """Filter ordered unique selected pages down to CPU-backed history."""
+    return [int(page) for page in selected_pages if int(page) not in current_map]
+
+
+def _mapped_pages_and_physical(
+    history_pages: Sequence[int],
+    current_pages: Sequence[int],
+    current_map: dict[int, int],
+    logical_to_slot: dict[int, int],
+    read_base: int,
+) -> tuple[list[int], list[int]]:
+    """Merge disjoint ordered WRITE/READ mappings without set sorting."""
+    mapped_pages = list(heapq.merge(current_pages, history_pages))
+    physical = [
+        current_map[page]
+        if page in current_map
+        else read_base + int(logical_to_slot[page])
+        for page in mapped_pages
+    ]
+    return mapped_pages, physical
 
 
 def _validate_write_mapping(
@@ -497,8 +539,13 @@ def run_streaming_runtime(
     misses_total = 0
     selected_history_total = 0
     selection_plan_wall = 0.0
+    selection_tensor_wall = 0.0
+    selection_cpu_filter_wall = 0.0
     stage_history_wall = 0.0
     table_build_wall = 0.0
+    table_allocate_wall = 0.0
+    table_mapping_wall = 0.0
+    table_index_copy_wall = 0.0
     attention_submit_wall = 0.0
     while start < num_tokens:
         plan_start = time.perf_counter()
@@ -506,16 +553,15 @@ def run_streaming_runtime(
         while True:
             end = start + size
             batch_selected = selected[start:end]
-            valid = batch_selected >= 0
-            pages_tensor = torch.div(
-                batch_selected.clamp_min(0).to(torch.int64),
-                page_tokens,
-                rounding_mode="floor",
-            )[valid]
-            selected_pages = sorted(
-                int(x) for x in torch.unique(pages_tensor).cpu().tolist()
+            selection_tensor_start = time.perf_counter()
+            unique_pages = _selected_page_tensor(batch_selected, page_tokens)
+            selection_tensor_wall += time.perf_counter() - selection_tensor_start
+            selection_cpu_start = time.perf_counter()
+            selected_pages = unique_pages.cpu().tolist()
+            history_pages = _history_pages_from_selected(
+                selected_pages, current_map
             )
-            history_pages = [page for page in selected_pages if page not in current_map]
+            selection_cpu_filter_wall += time.perf_counter() - selection_cpu_start
             working = len(history_pages) + len(current_pages)
             if working <= cap and len(history_pages) <= read_cap:
                 break
@@ -548,24 +594,36 @@ def run_streaming_runtime(
         state["trace_truncated"] = bool(state["trace_truncated"] or truncated)
         state["trace_wall_seconds_total"] += time.perf_counter() - trace_start
         table_start = time.perf_counter()
+        table_allocate_start = time.perf_counter()
         table = torch.full(
             (1, int(plan["cpu_page_count"])),
             -1,
             dtype=main_metadata.block_table.dtype,
             device=main_metadata.block_table.device,
         )
-        mapped_pages = sorted(set(history_pages).union(current_pages))
-        physical = [
-            current_map[page]
-            if page in current_map
-            else read_base + int(state["logical_to_slot"][page])
-            for page in mapped_pages
-        ]
+        table_allocate_wall += time.perf_counter() - table_allocate_start
+        table_mapping_start = time.perf_counter()
+        mapped_pages, physical = _mapped_pages_and_physical(
+            history_pages,
+            current_pages,
+            current_map,
+            state["logical_to_slot"],
+            read_base,
+        )
+        mapped_tensor = torch.tensor(
+            mapped_pages, dtype=torch.int64, device=table.device
+        )
+        physical_tensor = torch.tensor(
+            physical, dtype=table.dtype, device=table.device
+        )
+        table_mapping_wall += time.perf_counter() - table_mapping_start
+        table_index_start = time.perf_counter()
         table[0].index_copy_(
             0,
-            torch.tensor(mapped_pages, dtype=torch.int64, device=table.device),
-            torch.tensor(physical, dtype=table.dtype, device=table.device),
+            mapped_tensor,
+            physical_tensor,
         )
+        table_index_copy_wall += time.perf_counter() - table_index_start
         table_build_wall += time.perf_counter() - table_start
         end = start + size
         attention_start = time.perf_counter()
@@ -635,8 +693,13 @@ def run_streaming_runtime(
         "kv_update_submit_wall_seconds": kv_update_submit_wall,
         "publish_wall_seconds": publish_wall,
         "selection_plan_wall_seconds": selection_plan_wall,
+        "selection_tensor_wall_seconds": selection_tensor_wall,
+        "selection_cpu_filter_wall_seconds": selection_cpu_filter_wall,
         "stage_history_wall_seconds": stage_history_wall,
         "table_build_wall_seconds": table_build_wall,
+        "table_allocate_wall_seconds": table_allocate_wall,
+        "table_mapping_wall_seconds": table_mapping_wall,
+        "table_index_copy_wall_seconds": table_index_copy_wall,
         "attention_submit_wall_seconds": attention_submit_wall,
         **timing_delta,
         "trace_records_total": int(state["trace_records"]),
