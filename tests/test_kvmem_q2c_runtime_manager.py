@@ -191,3 +191,36 @@ def test_virtual_blocks_never_return_to_shared_pool():
     assert mgr.virtual_free_pages == 4160
     assert len(pool.free) == 20000
     assert pool.freed == []
+
+
+def test_append_only_worker_ids_keep_logical_alignment_under_virtual_reuse():
+    _, _, mgr = _manager()
+    req = "r"
+    worker_ids: list[int] = []
+
+    for processed in range(0, 160000, 1024):
+        mgr.remove_skipped_blocks(req, processed)
+        target = min(processed + 1024, 160000)
+        before_len = len(worker_ids)
+        fresh = mgr.allocate_new_blocks(req, target, target)
+        worker_ids.extend(int(b.block_id) for b in fresh)
+
+        # Every new logical page in this frozen prefill gets one fresh virtual
+        # ID; reclaim only changes old scheduler entries, so the vLLM 0.29
+        # worker's append-only table stays position-aligned.
+        logical_len = target // 16
+        assert len(worker_ids) == logical_len
+        assert len(worker_ids) - before_len == (target - processed) // 16
+        assert all(0 <= x < 4160 for x in worker_ids)
+
+    mgr.remove_skipped_blocks(req, 160000)
+    scheduler_blocks = mgr.req_to_blocks[req]
+    assert len(worker_ids) == len(scheduler_blocks) == 10000
+
+    # Scheduler has real null holes, while the worker intentionally retains
+    # stale virtual IDs at those old positions. Those positions must therefore
+    # be masked by frozen policy before attention rather than interpreted as
+    # current physical ownership.
+    assert any(b.is_null for b in scheduler_blocks)
+    assert all(0 <= x < 4160 for x in worker_ids)
+    assert len(set(worker_ids)) <= 4160
