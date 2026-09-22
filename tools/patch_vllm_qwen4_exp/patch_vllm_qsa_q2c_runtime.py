@@ -105,27 +105,32 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
     first_query_page = int(pos.min().item()) // page_tokens if pos.numel() else 0
     hist_end = min(first_query_page, int(plan["active_page0"]))
     resident_set = set(int(x) for x in plan["resident_pages"])
-    known_holes = [i for i in range(hist_end) if i not in resident_set]
+    first_hole = None
+    for page in range(hist_end):
+        if page not in resident_set:
+            first_hole = page
+            break
 
-    null_id = None
-    if known_holes:
-        hole_idx = _q2c_tensor(
-            plan, f"visibility_holes_{hist_end}", known_holes, block_table.device
-        )
-        hole_ids = block_table[0].index_select(0, hole_idx).to(torch.int64)
-        unique = torch.unique(hole_ids)
-        if unique.numel() != 1:
-            raise RuntimeError(
-                "Q2C processed nonresident pages did not collapse to one null block"
-            )
-        null_id = unique[0]
+    null_id = (
+        block_table[0, first_hole].to(torch.int64)
+        if first_hole is not None
+        else None
+    )
 
     logical = selected.clamp_min(0).to(torch.int64)
     pages = torch.div(logical, page_tokens, rounding_mode="floor")
+    if bool(valid.any().item()):
+        max_page = int(pages[valid].max().item())
+        if max_page >= int(block_table.shape[1]):
+            raise RuntimeError(
+                f"Q2C selected page {max_page} exceeds block-table width "
+                f"{block_table.shape[1]}"
+            )
     page_ids = block_table[0].index_select(0, pages.reshape(-1)).reshape_as(pages)
     historical = logical < int(plan["active_from_pos"])
+    processed_history = pages < hist_end
     drop = (
-        valid & historical & (page_ids == null_id)
+        valid & historical & processed_history & (page_ids == null_id)
         if null_id is not None
         else torch.zeros_like(valid)
     )
