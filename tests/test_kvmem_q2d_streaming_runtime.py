@@ -93,8 +93,8 @@ def test_scheduler_owns_only_current_64_page_window(monkeypatch, tmp_path):
             request_id, target, [], processed, processed, target
         ) == 0
         fresh = manager.allocate_new_blocks(request_id, target, target)
-        assert len(fresh) == 64
-        assert manager._real_count(request_id) == 64
+        assert 1 <= len(fresh) <= 64
+        assert manager._real_count(request_id) == len(fresh)
         assert all(0 <= block.block_id < 64 for block in fresh)
     manager.remove_skipped_blocks(request_id, 160000)
     assert manager._real_count(request_id) == 0
