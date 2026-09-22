@@ -13,6 +13,13 @@ PORT="${PORT:-8002}"
 MAXLEN="${MAXLEN:-4096}"
 MAXTOK="${MAXTOK:-128}"
 
+# Match the established R0 hardware-runner environment.  The first-boot
+# launcher intentionally invokes bare `python` and `vllm`, so the owning
+# runner must put the selected venv (and CUDA toolchain) on PATH.
+export CUDA_HOME="${CUDA_HOME:-$V/lib/python3.12/site-packages/nvidia/cu13}"
+export PATH="$CUDA_HOME/bin:$V/bin:$PATH"
+export VIRTUAL_ENV="$V"
+
 mkdir -p "$OUT"
 ACTUAL_SHA="$(git -C "$REPO" rev-parse HEAD)"
 if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
@@ -33,14 +40,26 @@ stop_engine() {
 }
 
 wait_healthy() {
+  local launcher_pid=$1
+  local log=$2
+  local tag=$3
   local deadline=$((SECONDS + 2400))
   while (( SECONDS < deadline )); do
     if curl -s -m 5 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 \
        && curl -s -m 10 "http://127.0.0.1:$PORT/v1/models" | grep -q '"id"'; then
       return 0
     fi
+    if ! kill -0 "$launcher_pid" 2>/dev/null; then
+      local rc=0
+      wait "$launcher_pid" || rc=$?
+      echo "ENGINE LAUNCHER EXITED BEFORE HEALTHY: tag=$tag pid=$launcher_pid rc=$rc" >&2
+      echo "=== launcher tail: $log ===" >&2
+      tail -n 80 "$log" >&2 || true
+      return 1
+    fi
     sleep 5
   done
+  echo "ENGINE HEALTH TIMEOUT: tag=$tag pid=$launcher_pid" >&2
   return 1
 }
 
@@ -90,8 +109,9 @@ run_case() {
   MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL=0.92 \
   MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 PORT="$PORT" NUM_SPEC_TOKENS=3 \
     setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh" >"$log" 2>&1 < /dev/null &
+  local launcher_pid=$!
 
-  if ! wait_healthy; then
+  if ! wait_healthy "$launcher_pid" "$log" "$tag"; then
     echo "ENGINE FAILED TO BECOME HEALTHY: $tag" >&2
     return 1
   fi
