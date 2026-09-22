@@ -73,39 +73,44 @@ def _manager():
 def test_runtime_plan_freezes_partition_and_cpu_capacity():
     plan = _plan()
     assert validate_streaming_plan(plan) == plan
-    assert plan["write_page_count"] == 64
-    assert plan["read_cache_page_count"] == 4096
+    assert plan["write_page_count"] == 128
+    assert plan["read_cache_page_count"] == 4032
     assert plan["cpu_page_count"] == 10063
     assert plan["write_page_count"] + plan["read_cache_page_count"] == 4160
-    bad = dict(plan, write_page_count=65)
+    bad = dict(plan, write_page_count=129)
     with pytest.raises(ValueError, match="write_page_count"):
         validate_streaming_plan(bad)
 
 
-def test_scheduler_owns_only_current_64_page_window(monkeypatch, tmp_path):
+def test_scheduler_owns_bounded_two_chunk_write_pipeline(monkeypatch, tmp_path):
     stats = tmp_path / "scheduler.jsonl"
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2D_SCHED_STATS_PATH", str(stats))
     spec, manager = _manager()
     request_id = "r"
-    for processed in range(0, 160000, 1024):
+    # The live scheduler allocates the second chunk before its first processed
+    # callback, so model that pipeline explicitly.
+    manager.allocate_new_blocks(request_id, 1024, 1024)
+    manager.allocate_new_blocks(request_id, 2048, 2048)
+    assert manager._real_count(request_id) == 128
+    for processed in range(1024, 160000, 1024):
         manager.remove_skipped_blocks(request_id, processed)
         target = min(processed + 1024, 160000)
         assert manager.get_num_blocks_to_allocate(
             request_id, target, [], processed, processed, target
         ) == 0
         fresh = manager.allocate_new_blocks(request_id, target, target)
-        assert 1 <= len(fresh) <= 64
-        assert manager._real_count(request_id) == len(fresh)
-        assert all(0 <= block.block_id < 64 for block in fresh)
+        assert 0 <= len(fresh) <= 64
+        assert manager._real_count(request_id) <= 128
+        assert all(0 <= block.block_id < 128 for block in fresh)
     manager.remove_skipped_blocks(request_id, 160000)
     assert manager._real_count(request_id) == 0
-    assert manager._peak_real_pages[request_id] == 64
+    assert manager._peak_real_pages[request_id] == 128
     assert all(block.is_null for block in manager.req_to_blocks[request_id])
     assert spec.physical_page_cap == 4160
     rows = [json.loads(line) for line in stats.read_text().splitlines()]
     assert sum(row.get("freed_pages", 0) for row in rows) == 10000
     assert sum(len(row.get("logical_pages", [])) for row in rows) == 10000
-    assert max(row.get("peak_real_write_pages", 0) for row in rows) == 64
+    assert max(row.get("peak_real_write_pages", 0) for row in rows) == 128
 
 
 def test_scheduler_keeps_partial_decode_page_until_complete():

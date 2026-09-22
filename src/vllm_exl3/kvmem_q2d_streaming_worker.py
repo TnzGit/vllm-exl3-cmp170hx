@@ -322,7 +322,10 @@ def run_streaming_runtime(
         selected_history_total += len(history_pages)
         start = end
 
-    real_pages = len(current_pages) + len(state["logical_to_slot"])
+    # Scheduler may pipeline the next 1024-token chunk before acknowledging
+    # the previous worker result, so conservatively charge the complete frozen
+    # WRITE partition rather than only this forward's current pages.
+    real_pages = int(plan["write_page_count"]) + len(state["logical_to_slot"])
     if real_pages > cap:
         raise RuntimeError("Q2D combined READ/WRITE ownership exceeds physical cap")
     _write_event({

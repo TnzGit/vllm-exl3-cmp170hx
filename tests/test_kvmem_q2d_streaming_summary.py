@@ -21,8 +21,8 @@ def _plan():
         "expected_qsa_layers": 2,
         "page_tokens": 16,
         "physical_page_count": 4160,
-        "write_page_count": 64,
-        "read_cache_page_count": 4096,
+        "write_page_count": 128,
+        "read_cache_page_count": 4032,
     }
 
 
@@ -52,8 +52,8 @@ def _worker():
                 "reload_miss_pages": 0,
                 "selected_history_pages": 0,
                 "read_table_mode": "dynamic_cpu_history_plus_scheduler_writes",
-                "write_partition": [0, 63],
-                "read_partition": [64, 4159],
+                "write_partition": [0, 127],
+                "read_partition": [128, 4159],
             })
     return rows
 

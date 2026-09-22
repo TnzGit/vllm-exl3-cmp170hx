@@ -37,8 +37,8 @@ def validate_streaming_plan(plan: dict[str, Any]) -> dict[str, Any]:
     frozen = {
         "page_tokens": 16,
         "physical_page_count": 4160,
-        "write_page_count": 64,
-        "read_cache_page_count": 4096,
+        "write_page_count": 128,
+        "read_cache_page_count": 4032,
         "scheduler_chunk_tokens": 1024,
         "query_row_batch": 64,
         "staging_pages": 128,
@@ -91,7 +91,7 @@ class QSAStreamingRuntimeSpec(AttentionSpec):
 
 
 class QSAStreamingRuntimeManager(SingleTypeKVCacheManager):
-    """Own only the current <=64 QSA write pages on behalf of scheduler."""
+    """Own the scheduler's bounded two-chunk QSA WRITE pipeline."""
 
     def __init__(self, kv_cache_spec: QSAStreamingRuntimeSpec, **kwargs) -> None:
         kwargs["enable_caching"] = False
