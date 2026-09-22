@@ -14,6 +14,11 @@ PORT="${PORT:-8002}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.92}"
 MAXLEN="${MAX_MODEL_LEN:-161000}"
 MAXTOK="${K1Q2C_MAX_TOKENS:-512}"
+MAX_BATCHED="${K1Q2C_MAX_NUM_BATCHED_TOKENS:-1024}"
+if [[ "$MAX_BATCHED" != "1024" ]]; then
+  echo "REFUSE: Q2C runtime proof requires max-num-batched-tokens=1024" >&2
+  exit 2
+fi
 
 export CUDA_HOME="${CUDA_HOME:-$V/lib/python3.12/site-packages/nvidia/cu13}"
 export PATH="$CUDA_HOME/bin:$V/bin:$PATH"
@@ -217,7 +222,7 @@ VLLM_QWEN_KVMEM_Q2C_WORKER_STATS_PATH="$WORKER_STATS" \
 VLLM_KV_CACHE_LAYOUT=BLHNC \
 ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 \
 MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" \
-MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 PORT="$PORT" \
+MAX_MODEL_LEN="$MAXLEN" MAX_NUM_SEQS=1 MAX_NUM_BATCHED_TOKENS="$MAX_BATCHED" PORT="$PORT" \
   setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh" \
   > "$OUT/logs/serve_q2c.log" 2>&1 < /dev/null &
 LAUNCH_PID=$!
