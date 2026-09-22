@@ -153,6 +153,11 @@ def _assign_many(
     pages = [int(page) for page in logical_pages]
     if len(set(pages)) != len(pages):
         raise RuntimeError("Q2D bulk slot assignment contains duplicate pages")
+    last_use_array = state.get("last_use_array")
+    if last_use_array is not None and any(
+        page < 0 or page >= len(last_use_array) for page in pages
+    ):
+        raise RuntimeError("Q2D logical page is outside LRU timestamp array")
     missing = [page for page in pages if page not in state["logical_to_slot"]]
     if not missing:
         return [int(state["logical_to_slot"][page]) for page in pages]
@@ -168,9 +173,12 @@ def _assign_many(
             int(logical) for logical in state["logical_to_slot"]
             if int(logical) not in protected
         ]
-        last_use_array = state.get("last_use_array")
         if last_use_array is not None:
             candidate_pages = np.asarray(candidates, dtype=np.int64)
+            if candidate_pages.size and bool(
+                np.any((candidate_pages < 0) | (candidate_pages >= len(last_use_array)))
+            ):
+                raise RuntimeError("Q2D resident page is outside LRU timestamp array")
             candidate_times = last_use_array[candidate_pages]
             if bool(np.any(candidate_times < 0)):
                 raise RuntimeError("Q2D resident page has no LRU timestamp")
@@ -216,11 +224,23 @@ def _touch(state: dict[str, Any], pages: Sequence[int]) -> None:
     if not count:
         return
     first = int(state["clock"]) + 1
-    if state.get("last_use_array") is not None:
+    last_use_array = state.get("last_use_array")
+    if last_use_array is not None:
+        last = first + count - 1
+        if last > int(np.iinfo(last_use_array.dtype).max):
+            raise RuntimeError("Q2D LRU timestamp exceeds array dtype")
         indices = np.fromiter((int(page) for page in pages), dtype=np.int64, count=count)
-        state["last_use_array"][indices] = np.arange(
-            first, first + count, dtype=np.int64
-        )
+        if bool(np.any((indices < 0) | (indices >= len(last_use_array)))):
+            raise RuntimeError("Q2D touched page is outside LRU timestamp array")
+        timestamps = np.arange(first, first + count, dtype=last_use_array.dtype)
+        if count > 1 and bool(np.any(indices[1:] <= indices[:-1])):
+            # The streaming path supplies sorted unique pages. Preserve the
+            # original sequential last-write-wins semantics defensively for
+            # any other caller, including duplicate indices.
+            for page, timestamp in zip(indices, timestamps, strict=True):
+                last_use_array[page] = timestamp
+        else:
+            last_use_array[indices] = timestamps
     else:
         state["last_use"].update(
             zip((int(page) for page in pages), range(first, first + count), strict=True)

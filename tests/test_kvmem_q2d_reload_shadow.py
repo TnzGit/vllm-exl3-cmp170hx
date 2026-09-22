@@ -108,6 +108,23 @@ def test_array_lru_matches_stable_dict_ties_and_touch_order():
     assert _assign_many(tied, [22], {22}) == [0]
 
 
+def test_array_lru_rejects_range_and_clock_overflow_and_preserves_duplicates():
+    state = _lru_state(2)
+    state["last_use_array"] = np.full(4, -1, dtype=np.int64)
+    with pytest.raises(RuntimeError, match="outside LRU timestamp"):
+        _assign_many(state, [-1], set())
+    with pytest.raises(RuntimeError, match="outside LRU timestamp"):
+        _assign_many(state, [4], set())
+
+    _assign_many(state, [1, 2], set())
+    _touch(state, [1, 1, 2])
+    assert state["clock"] == 3
+    assert state["last_use_array"][[1, 2]].tolist() == [2, 3]
+    state["clock"] = int(np.iinfo(np.int64).max)
+    with pytest.raises(RuntimeError, match="exceeds array dtype"):
+        _touch(state, [1])
+
+
 def test_lru_refuses_when_entire_pool_is_protected():
     state = _lru_state(2)
     _assign_slot(state, 1, set())
