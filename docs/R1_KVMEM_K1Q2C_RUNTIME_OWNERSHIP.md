@@ -137,10 +137,76 @@ nonresident history from later prefill rows. The final run recorded
 1,876,958,640 dropped prefill historical selections, and the target semantics
 collapsed.
 
-Under the fixed 4,160-page cap and frozen resident policy, there is no further
-implementation-only retry justified. A future semantic attempt requires a new
-policy phase, such as causal per-chunk residency/reload, and must be evaluated
-as a new experiment rather than a relaxation of this gate.
+This run alone did not distinguish a policy failure from an implementation
+error: exact CPU round-trip proves that stored bytes survive, but cannot prove
+that the correct logical bytes were stored or addressed. That distinction was
+resolved by the controlled attribution experiment below.
+
+## Controlled semantic attribution
+
+The attribution harness at exact SHA
+`7ef81b931922bc9109b82e6a443d046f6bd3a950` ran three 159,533-token cases with
+the same model, prompt, 1,024-token chunking, eager mode, MTP disabled, and
+sampling settings:
+
+| Case | Physical QSA source | Visibility | Result |
+| --- | --- | --- | --- |
+| A | stock full GPU KV | original selection | PASS, both target codes |
+| B | stock full GPU KV | shared Q2C progressive mask | FAIL, immediate `<|im_end|>` |
+| C | bounded Q2C ownership | same shared mask | FAIL, immediate `<|im_end|>` |
+
+B retains the full stock GPU KV and changes only visibility. Its failure is
+therefore direct evidence that the progressive frozen mask is semantically
+causal; Q2C reclaim, virtual-ID reuse, CPU restore, or bounded storage are not
+required to reproduce the failure. C simultaneously passed its mechanical
+gates: scheduler peak 4,099 pages, 5,872 reclaims, exact READ block-table / WRITE
+slot-mapping accounting, 12-layer CPU authority, and exact virtual-ID lifecycle.
+
+Cross-process attention/selection bit fingerprints were not used as a gate.
+A and B already diverged before any page became mask-eligible, demonstrating
+that EXL3/CUDA run-to-run numerical variation makes cross-process bit equality
+unsuitable here. The causal classification is:
+
+```text
+Q2C_ATTRIBUTION_PROGRESSIVE_POLICY_CAUSAL
+```
+
+Under the unchanged progressive frozen policy, another implementation-only
+retry is not justified. A semantic successor must preserve selected history,
+for example through CPU-authoritative history and bounded selection-driven
+reload.
+
+## Reload working-set feasibility
+
+The original-selection A control was instrumented without changing its
+semantics. Exact SHA `31016ab71eacd8fac8328123f8633eeef6f7cdd5` passed 39
+CPU/static tests and the 160K semantic request, then measured all 1,896
+layer/chunk events across 12 QSA layers.
+
+- full 12-layer QSA history at 9,971 pages/layer is 3.6515 GiB in CPU backing;
+- a whole 1,024-query chunk needs as many as 7,304 unique pages and exceeds
+  the 4,160-page cap in 695 events;
+- 128-query-row batches still peak at 4,723 pages and exceed the cap in 9
+  events;
+- 64-query-row batches peak at 3,973 pages and exceed the cap in 0 events.
+
+The resulting classification is:
+
+```text
+Q2C_RELOAD_ROW_BATCH_64_FEASIBLE
+```
+
+This is a capacity result, not yet a semantic or performance qualification of
+reload. The current `4096 sticky + 64 active` contract has no reload space and
+cannot be retained. The next phase must make historical residency evictable
+and define one hard pool of at most 4,160 pages containing the current writes
+plus the selected working set for each <=64-row QSA sub-batch. It must save all
+completed history to CPU before eviction, restore selected misses before READ,
+and compare staged K/V plus attention output with the full-KV A reference.
+
+The cold no-reuse transfer upper bound is about 114.85 GiB/request, so this
+capacity proof makes no latency claim. Reuse, transfer coalescing, and overlap
+belong after semantic correctness and cap enforcement are live-proven.
 
 ## Remaining non-claims
 
@@ -152,6 +218,8 @@ This run does not establish:
 - causal resident selection without future-turn knowledge;
 - exact hidden-state/token parity against full-history prefill;
 - dynamic sticky replacement across multiple turns;
+- selection-driven CPU reload correctness;
+- <=64-row QSA sub-batch attention equivalence;
 - production latency/TTFT;
 - an engine-start arena allocation reduction (vLLM still preallocates its
   shared KV arena according to gpu_memory_utilization).
