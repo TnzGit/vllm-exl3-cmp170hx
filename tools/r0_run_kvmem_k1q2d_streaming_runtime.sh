@@ -116,6 +116,7 @@ RESPONSE="$OUT/q2d_response.json"
 SUMMARY="$OUT/q2d_streaming_summary.json"
 TRACE="$OUT/q2e_access_trace.bin"
 TRACE_SUMMARY="$OUT/q2e_access_trace_summary.json"
+LRU_REPLAY="$OUT/q2e_lru_replay.json"
 LOG="$OUT/logs/serve_q2d_streaming.log"
 LAUNCH_PID=""
 PATCHED=0
@@ -224,6 +225,7 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2d_streaming_runtime.sh"
   "$REPO/tools/kvmem_qsa_make_q2d_runtime_plan.py" \
   "$REPO/tools/kvmem_q2d_streaming_summarize.py" \
   "$REPO/tools/kvmem_q2e_trace_summarize.py" \
+  "$REPO/tools/kvmem_q2e_lru_replay.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2d_streaming_runtime.py"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2d_streaming_runtime.py" \
@@ -235,6 +237,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$REPO/tests/test_qsa_q2d_streaming_runtime_patch.py" \
   "$REPO/tests/test_kvmem_q2d_streaming_summary.py" \
   "$REPO/tests/test_kvmem_q2e_trace.py" \
+  "$REPO/tests/test_kvmem_q2e_lru_replay.py" \
   "$REPO/tests/test_kvmem_vllm_offload_adapter.py"
 
 echo "=== build exact frozen plans ==="
@@ -324,6 +327,9 @@ if [[ "$Q2E_PROFILE" == "1" ]]; then
   PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
     "$V/bin/python" "$REPO/tools/kvmem_q2e_trace_summarize.py" \
     --trace "$TRACE" --out "$TRACE_SUMMARY"
+  PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+    "$V/bin/python" "$REPO/tools/kvmem_q2e_lru_replay.py" \
+    --trace "$TRACE" --capacity 4032 --out "$LRU_REPLAY"
   TRACE_ARGS=(--trace-summary "$TRACE_SUMMARY")
 fi
 if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
