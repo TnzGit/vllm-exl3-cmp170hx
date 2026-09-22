@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Qualify scheduler-owned Q2D CPU-authoritative streaming runtime."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import json
+from pathlib import Path
+from typing import Any
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def summarize(
+    response: dict[str, Any],
+    worker_rows: list[dict[str, Any]],
+    scheduler_rows: list[dict[str, Any]],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    prompt_tokens = int(plan["query_span"][1])
+    chunk_tokens = int(plan["scheduler_chunk_tokens"])
+    expected_layers = int(plan["expected_qsa_layers"])
+    page_tokens = int(plan["page_tokens"])
+    cap = int(plan["physical_page_count"])
+    write_cap = int(plan["write_page_count"])
+    read_cap = int(plan["read_cache_page_count"])
+    expected_spans = tuple(
+        (start, min(start + chunk_tokens, prompt_tokens) - 1)
+        for start in range(0, prompt_tokens, chunk_tokens)
+    )
+    expected_span_set = set(expected_spans)
+    events = [
+        row for row in worker_rows
+        if row.get("event") == "q2d_streaming_runtime"
+    ]
+    prefill = [
+        row for row in events
+        if (int(row.get("first_pos", -1)), int(row.get("last_pos", -1)))
+        in expected_span_set
+        and int(row.get("query_rows", 0))
+        == int(row.get("last_pos", -1)) - int(row.get("first_pos", -1)) + 1
+    ]
+    layers = sorted({str(row["layer"]) for row in prefill})
+    counts = Counter(
+        (str(row["layer"]), int(row["first_pos"]), int(row["last_pos"]))
+        for row in prefill
+    )
+    expected_keys = {
+        (layer, first, last)
+        for layer in layers
+        for first, last in expected_spans
+    }
+    observed_keys = set(counts)
+    duplicates = sum(count - 1 for count in counts.values() if count > 1)
+    unexpected_prefill = [
+        row for row in events
+        if int(row.get("last_pos", prompt_tokens)) < prompt_tokens and row not in prefill
+    ]
+    coverage_gate = bool(
+        len(layers) == expected_layers
+        and observed_keys == expected_keys
+        and duplicates == 0
+        and not unexpected_prefill
+    )
+    required = (
+        "current_write_pages",
+        "resident_read_pages",
+        "combined_real_pages",
+        "max_working_pages",
+        "physical_page_cap",
+        "published_pages_total",
+        "cpu_roundtrip_pages_total",
+        "cpu_roundtrip_exact",
+        "d2h_bytes_total",
+        "h2d_bytes_total",
+        "read_table_mode",
+        "write_partition",
+        "read_partition",
+    )
+    fields_gate = bool(events) and all(
+        all(field in row for field in required) for row in events
+    )
+    capacity_gate = bool(
+        fields_gate
+        and all(
+            int(row["current_write_pages"]) <= write_cap
+            and int(row["resident_read_pages"]) <= read_cap
+            and int(row["combined_real_pages"]) <= cap
+            and int(row["max_working_pages"]) <= cap
+            and int(row["physical_page_cap"]) == cap
+            for row in events
+        )
+    )
+    mapping_gate = bool(
+        fields_gate
+        and all(
+            row["read_table_mode"]
+            == "dynamic_cpu_history_plus_scheduler_writes"
+            and row["write_partition"] == [0, write_cap - 1]
+            and row["read_partition"] == [write_cap, cap - 1]
+            for row in events
+        )
+    )
+    cpu_gate = bool(
+        fields_gate and all(bool(row["cpu_roundtrip_exact"]) for row in events)
+    )
+    expected_published = prompt_tokens // page_tokens
+    final_by_layer = {
+        layer: max(
+            (row for row in events if str(row["layer"]) == layer),
+            key=lambda row: (int(row["last_pos"]), int(row["published_pages_total"])),
+        )
+        for layer in layers
+    }
+    publication_gate = bool(
+        len(final_by_layer) == expected_layers
+        and all(
+            int(row["published_pages_total"]) >= expected_published
+            and int(row["cpu_roundtrip_pages_total"]) >= expected_published
+            for row in final_by_layer.values()
+        )
+    )
+    assignments = [
+        row for row in scheduler_rows if row.get("event") == "q2d_scheduler_assign"
+    ]
+    reclaims = [
+        row for row in scheduler_rows if row.get("event") == "q2d_scheduler_reclaim"
+    ]
+    scheduler_gate = bool(
+        assignments
+        and reclaims
+        and all(
+            int(row.get("real_write_pages", write_cap + 1)) <= write_cap
+            and int(row.get("peak_real_write_pages", write_cap + 1)) <= write_cap
+            and all(0 <= int(x) < write_cap for x in row.get("write_ids", []))
+            for row in assignments
+        )
+        and all(
+            int(row.get("real_write_pages", write_cap + 1)) <= write_cap
+            and int(row.get("peak_real_write_pages", write_cap + 1)) <= write_cap
+            and all(0 <= int(x) < write_cap for x in row.get("freed_write_ids", []))
+            for row in reclaims
+        )
+        and sum(len(row.get("logical_pages", [])) for row in assignments)
+        >= (prompt_tokens + page_tokens - 1) // page_tokens
+        and sum(int(row.get("freed_pages", 0)) for row in reclaims)
+        >= expected_published
+    )
+    semantic_gate = bool(
+        response.get("target_codes_in_order")
+        and response.get("finish_reason") == "stop"
+        and int(response.get("usage", {}).get("prompt_tokens", -1)) == prompt_tokens
+    )
+    evidence_gate = bool(
+        coverage_gate and fields_gate and capacity_gate and mapping_gate
+        and cpu_gate and publication_gate and scheduler_gate
+    )
+    go = bool(evidence_gate and semantic_gate)
+    if go:
+        classification = "Q2D_CPU_AUTHORITATIVE_STREAMING_SEMANTIC_GO"
+    elif not coverage_gate or not fields_gate:
+        classification = "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
+    elif not scheduler_gate or not capacity_gate:
+        classification = "Q2D_STREAMING_OWNERSHIP_NO_GO"
+    elif not cpu_gate or not publication_gate:
+        classification = "Q2D_STREAMING_CPU_AUTHORITY_NO_GO"
+    elif not mapping_gate:
+        classification = "Q2D_STREAMING_READ_WRITE_MAPPING_NO_GO"
+    else:
+        classification = "Q2D_STREAMING_SEMANTIC_NO_GO"
+    return {
+        "schema": 1,
+        "classification": classification,
+        "streaming_qualification_go": go,
+        "evidence_gate": evidence_gate,
+        "semantic_gate": semantic_gate,
+        "coverage_gate": coverage_gate,
+        "fields_gate": fields_gate,
+        "capacity_gate": capacity_gate,
+        "mapping_gate": mapping_gate,
+        "cpu_authority_gate": cpu_gate,
+        "publication_gate": publication_gate,
+        "scheduler_gate": scheduler_gate,
+        "records": len(prefill),
+        "all_worker_events": len(events),
+        "expected_records": expected_layers * len(expected_spans),
+        "layer_count": len(layers),
+        "missing_records": len(expected_keys - observed_keys),
+        "unexpected_records": len(observed_keys - expected_keys),
+        "duplicate_records": duplicates,
+        "unexpected_prefill_records": len(unexpected_prefill),
+        "physical_page_cap": cap,
+        "write_page_cap": write_cap,
+        "read_cache_page_cap": read_cap,
+        "max_current_write_pages": max(
+            (int(row.get("current_write_pages", 0)) for row in events), default=0
+        ),
+        "max_resident_read_pages": max(
+            (int(row.get("resident_read_pages", 0)) for row in events), default=0
+        ),
+        "max_combined_real_pages": max(
+            (int(row.get("combined_real_pages", 0)) for row in events), default=0
+        ),
+        "max_working_pages": max(
+            (int(row.get("max_working_pages", 0)) for row in events), default=0
+        ),
+        "expected_prompt_published_pages_per_layer": expected_published,
+        "min_final_published_pages_per_layer": min(
+            (int(row["published_pages_total"]) for row in final_by_layer.values()),
+            default=0,
+        ),
+        "min_final_roundtrip_pages_per_layer": min(
+            (int(row["cpu_roundtrip_pages_total"]) for row in final_by_layer.values()),
+            default=0,
+        ),
+        "scheduler_assign_events": len(assignments),
+        "scheduler_reclaim_events": len(reclaims),
+        "scheduler_assigned_pages": sum(
+            len(row.get("logical_pages", [])) for row in assignments
+        ),
+        "scheduler_reclaimed_pages": sum(
+            int(row.get("freed_pages", 0)) for row in reclaims
+        ),
+        "scheduler_peak_write_pages": max(
+            (int(row.get("peak_real_write_pages", 0)) for row in assignments + reclaims),
+            default=0,
+        ),
+        "reload_miss_pages": sum(
+            int(row.get("reload_miss_pages", 0)) for row in events
+        ),
+        "selected_history_pages": sum(
+            int(row.get("selected_history_pages", 0)) for row in events
+        ),
+        "d2h_bytes": sum(
+            int(row["d2h_bytes_total"]) for row in final_by_layer.values()
+        ),
+        "h2d_bytes": sum(
+            int(row["h2d_bytes_total"]) for row in final_by_layer.values()
+        ),
+        "d2h_jobs": sum(
+            int(row.get("d2h_jobs_total", 0)) for row in final_by_layer.values()
+        ),
+        "h2d_jobs": sum(
+            int(row.get("h2d_jobs_total", 0)) for row in final_by_layer.values()
+        ),
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--response", type=Path, required=True)
+    ap.add_argument("--worker-stats", type=Path, required=True)
+    ap.add_argument("--scheduler-stats", type=Path, required=True)
+    ap.add_argument("--plan", type=Path, required=True)
+    ap.add_argument("--out", type=Path, required=True)
+    args = ap.parse_args()
+    result = summarize(
+        json.loads(args.response.read_text()),
+        load_jsonl(args.worker_stats),
+        load_jsonl(args.scheduler_stats),
+        json.loads(args.plan.read_text()),
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2))
+    return 0 if result["streaming_qualification_go"] else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
