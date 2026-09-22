@@ -29,6 +29,11 @@ def summarize(
     expected_transfer = resident_count * page_size
     expected_jobs = (resident_count + staging_pages - 1) // staging_pages
     expected_staging_bytes = staging_pages * page_size
+    expected_private_blocks = physical_cap + 1
+    expected_private_storage = int(
+        (boot.get("expected") or {}).get("private_qsa_bytes", 0)
+    )
+    expected_private_block_stride = expected_layers * page_size
     dual_pool_gate = bool(
         boot.get("dual_pool_boot_gate")
         and boot.get("classification") == "Q2C_DUAL_POOL_BOOT_GO"
@@ -76,6 +81,21 @@ def summarize(
         and all(int(r["resident_history_pages"]) == resident_count for r in by_layer.values())
         and all(int(r["hole_pages"]) > 0 for r in by_layer.values())
         and all(int(r["hole_unique_ids"]) == 1 for r in by_layer.values())
+        and all(
+            int(r.get("private_cache_blocks", 0)) == expected_private_blocks
+            for r in by_layer.values()
+        )
+        and expected_private_storage > 0
+        and all(
+            int(r.get("private_cache_storage_bytes", 0))
+            == expected_private_storage
+            for r in by_layer.values()
+        )
+        and all(
+            int(r.get("private_cache_block_stride_bytes", 0))
+            == expected_private_block_stride
+            for r in by_layer.values()
+        )
     )
     cpu_gate = bool(
         layer_gate
@@ -203,6 +223,24 @@ def summarize(
             "hole_unique_ids": sorted(
                 {int(r["hole_unique_ids"]) for r in by_layer.values()}
             ),
+            "private_cache_blocks": sorted(
+                {int(r.get("private_cache_blocks", 0)) for r in by_layer.values()}
+            ),
+            "private_cache_storage_bytes": sorted(
+                {
+                    int(r.get("private_cache_storage_bytes", 0))
+                    for r in by_layer.values()
+                }
+            ),
+            "private_cache_block_stride_bytes": sorted(
+                {
+                    int(r.get("private_cache_block_stride_bytes", 0))
+                    for r in by_layer.values()
+                }
+            ),
+            "expected_private_cache_blocks": expected_private_blocks,
+            "expected_private_cache_storage_bytes": expected_private_storage,
+            "expected_private_cache_block_stride_bytes": expected_private_block_stride,
             "d2h_bytes_by_layer": {
                 k: int(v["d2h_bytes"]) for k, v in by_layer.items()
             },
