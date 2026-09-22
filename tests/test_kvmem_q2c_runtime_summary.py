@@ -30,9 +30,10 @@ def _plan():
 def _worker(layer):
     return {
         "layer": layer, "phase": "shrunk", "logical_pages": 12,
-        "scheduler_real_pages": 6, "physical_page_cap": 6,
+        "worker_unique_virtual_ids": 6, "physical_page_cap": 6,
         "resident_history_pages": 4, "active_real_pages": 2,
-        "hole_pages": 6, "hole_unique_ids": 1, "null_block_id": 0,
+        "virtual_id_range_ok": True, "resident_ids_valid": True,
+        "worker_table_mode": "append_only_virtual_ids",
         "historical_selected": 10, "historical_resident_kept": 4,
         "historical_selected_dropped": 6,
         "prefill_historical_selected": 100,
