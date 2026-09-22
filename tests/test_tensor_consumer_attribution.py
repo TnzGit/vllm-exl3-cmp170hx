@@ -67,7 +67,9 @@ def test_summary_reconciles_tensor_consumer_with_exl3_copy_wall():
     assert out["totals"]["consumer_fraction_of_main_weights"] == 0.8
     assert out["by_suffix"]["trellis"]["consumer_wall_s"] == 14.0
     rec = out["exl3_copy_reconciliation"]
-    assert rec["trellis_consumer_minus_direct_copy_s"] == 4.0
+    assert rec["routed_trellis_consumer_minus_direct_copy_s"] == 4.0
+    assert rec["generic_candidate_consumer_wall_s"] == 2.0
+    assert rec["generic_candidate_minus_generic_copy_s"] == 0.5
     assert rec["consumer_wall_outside_instrumented_exl3_copy_s"] == 8.5
     assert out["top_consumers"][0]["name"] == "x.trellis"
 
