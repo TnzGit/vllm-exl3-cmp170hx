@@ -474,6 +474,16 @@ combined peak 4,160, and frozen-prefill scheduler digest
 Post-run state was Xid delta zero, exact installed-QSA restore, 14 MiB GPU
 use, no residual GPU/vLLM process, and a closed service port.
 
+The corresponding base-node artifact directories are:
+
+```text
+/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-selection-bitmap-883b207-live1
+/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-selection-bitmap-883b207-live2
+/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-selection-bitmap-883b207-live3
+/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-selection-bitmap-883b207-oracle1
+/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-byte-oracle-53d6fd0-live1
+```
+
 An interleaved rerun of the old `ddcf37f` baseline emitted only
 `<|im_end|>`. Its 1,872 prefill worker records and timing coverage were
 complete, but the immediate semantic stop omitted final scheduler-reclaim
