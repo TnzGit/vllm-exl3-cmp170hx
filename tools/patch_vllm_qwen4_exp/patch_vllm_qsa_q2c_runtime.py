@@ -492,6 +492,17 @@ BIND_BLOCK = """    def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
         self.kv_cache = dedicated
         self.kv_cache[int(self._q2c_virtual_null_block_id)].zero_()
         self._q2c_dedicated_bound = True
+        _q2c_stats(
+            {
+                "layer": self.layer_name,
+                "phase": "dedicated_bind",
+                "dedicated_pages": int(dedicated.shape[0]),
+                "dedicated_bytes": int(actual_bytes),
+                "virtual_null_block_id": int(self._q2c_virtual_null_block_id),
+                "placeholder_shape": list(self._q2c_placeholder_shape),
+                "placeholder_bytes": int(self._q2c_placeholder_bytes),
+            }
+        )
 
     def get_attn_backend(self) -> type[AttentionBackend]:
         return self.attn_backend
