@@ -231,3 +231,89 @@ the prerequisite for useful long-session concurrency.
 
 Run exactly one 160K frozen semantic case. Stop after evidence collection.
 Do not continue to 240K, MTP, multi-request, or dynamic replacement.
+
+## Q2D CPU-authoritative streaming successor
+
+The progressive frozen-mask policy above is closed as a semantic NO_GO, but
+the bounded-ownership mechanism was successfully reused by Q2D. Final live
+code SHA `c3f3d45ad8670dfef1d57401a80b46fafa0ab21f` keeps every completed QSA
+page CPU-authoritative, divides the fixed GPU pool into 128 scheduler WRITE
+pages plus 4,032 worker READ pages, and restores original selected history in
+at most 64-query-row sub-batches.
+
+Two fresh 160K runs both returned `violet-harbor-31, granite-comet-72`, covered
+all 1,872 prefill layer/chunk records, reached exactly 4,160 combined real
+pages, round-tripped at least 9,977 pages/layer bit-exactly, and ended with Xid
+delta zero and an exact installed-QSA restore. End-to-end wall time remained
+227--230 seconds and H2D traffic was about 68.7 GB/request, so Q2D is a
+correctness/capacity qualification rather than a performance acceptance.
+
+## Q2E transfer profile and direct-slot experiment
+
+Q2E first added phase timing, an append-only CRC-protected access trace, and a
+memory census without changing Q2D data flow. The initial staged profile at
+exact SHA `24733aaffc18bf3225918a3864d38f13ef218b99` was a semantic GO and
+closed all trace counts exactly: 33,120 records, 56,510,749 selected-history
+pages, 2,102,171 assigned misses, and 12 layers with 2,760 records each.
+
+That profile showed that transfer DMA alone was not the whole exposed cost.
+During prefill, H2D worker wall time was 22.47 seconds, while total history
+staging was 53.30 seconds; selection planning was 17.62 seconds, dynamic table
+construction 18.27 seconds, and deliberately synchronous trace emission 19.35
+seconds. This justified testing the already-installed vLLM worker's arbitrary
+destination support before implementing reference-repo-style packing.
+
+The direct candidate binds CPU backing to the dedicated QSA cache itself,
+publishes from scheduler WRITE IDs, and loads each demand-miss set directly to
+its assigned READ IDs in one job. It leaves the existing 128-page staging
+tensor allocated but unused so boot memory and the QSA patch remain matched to
+the staged control.
+
+The first direct run at
+`a7cb062c28a6b0fa143a0d0c4732c31e51ccfd8c` exposed a real ordering bug: all
+prefill coverage, capacity, publication round-trip, and trace-integrity gates
+passed, but the model emitted only `<|im_end|>`. A bounded byte oracle then
+verified at least 1,851 early direct-load pages per layer against the CPU
+backing and restored the correct semantic answer. Replacing that oracle with
+an explicit post-load consumer barrier also restored semantics without any
+readback. The barrier's measured prefill cost was only 0.25--0.26 seconds.
+
+The final exact head is:
+
+```text
+5298916b68d15a4b73ca822585746fb5d2e884e4
+```
+
+Its fresh 160K direct run classified
+`Q2D_CPU_AUTHORITATIVE_STREAMING_SEMANTIC_GO` and recorded:
+
+- exact target answer and `finish_reason=stop`;
+- 1,872/1,872 prefill records across 12 layers;
+- WRITE peak 128, READ peak 4,032, combined peak 4,160;
+- at least 9,977 published and bit-exact round-tripped pages/layer;
+- 20,441 H2D jobs, versus 28,219 in the matched staged run;
+- zero staging-to-READ D2D copies;
+- 0.259 seconds total prefill consumer-barrier time;
+- scheduler policy digest
+  `52441ad0632294d31cf6ceabdbfb09d18062c477c495819bae16d381a4f0b514`,
+  exactly matching the staged baseline;
+- Xid delta zero, exact QSA restore, 14 MiB post-run GPU use, and no residual
+  GPU/vLLM process.
+
+The matched staged and direct profile wall times were 249.37 and 248.16
+seconds. This is not evidence of a material end-to-end speedup. Direct I/O is
+accepted as a simpler, correct transfer path with fewer jobs and no D2D bounce;
+performance work should next target selection planning, table construction,
+and avoidable cache misses before adding packing or overlap.
+
+Cross-process access-trace SHA is retained as a diagnostic, not a hard gate.
+The matched staged rerun was fully correct with the same plan and exact same
+scheduler-policy digest, yet its access SHA differed from the earlier staged
+profile. Hard trace gates therefore cover structural completeness and exact
+agreement with the current run's worker counters; policy preservation is
+gated by the canonical plan and normalized scheduler trace.
+
+Q2E does not yet prove an event-fenced asynchronous consumer path, removal of
+the allocated staging tensor, a broad prompt suite, 240K, MTP, multi-request
+concurrency, recurrent-state restoration, or NVMe backing. Any replacement of
+the synchronous consumer barrier requires a new semantic qualification.
