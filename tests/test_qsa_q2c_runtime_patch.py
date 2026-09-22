@@ -48,6 +48,8 @@ def test_q2c_patch_contains_scheduler_owned_contract():
     assert "_q2c_restore_history_from_cpu" in out
     assert "main_metadata.slot_mapping" in out
     assert "main_metadata.block_table" in out
-    assert "scheduler_real_pages" in out
+    assert "worker_unique_virtual_ids" in out
+    assert "append_only_virtual_ids" in out
+    assert "torch.isin" in out
     assert "single_tensor_cpu_backing" in out
     assert "independent resident" not in mod.__doc__.lower()
