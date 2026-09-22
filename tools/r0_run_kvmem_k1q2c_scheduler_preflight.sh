@@ -53,6 +53,7 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2c_scheduler_preflight.sh"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" -m pytest -q \
   "$REPO/tests/test_kvmem_q2c_scheduler_contract.py" \
+  "$REPO/tests/test_kvmem_q2c_scheduler_preflight.py" \
   "$REPO/tests/test_kvmem_q2c_scheduler_preflight_runner.py"
 
 echo "=== installed-vLLM Q2C preflight ==="
