@@ -33,10 +33,17 @@ def test_q2c_patch_contains_scheduler_owned_contract():
     src = target.read_text()
     out = src.replace(mod.IMPORT_ANCHOR, mod.IMPORT_BLOCK, 1)
     out = out.replace(mod.HELPER_ANCHOR, mod.HELPER, 1)
+    out = out.replace(mod.INIT_ANCHOR, mod.INIT_BLOCK, 1)
+    out = out.replace(mod.BIND_ANCHOR, mod.BIND_BLOCK, 1)
     out = out.replace(mod.SPEC_ANCHOR, mod.SPEC_BLOCK, 1)
     out = out.replace(mod.RUN_ANCHOR, mod.RUN_BLOCK, 1)
     assert mod.MARKER in out
     assert "make_qsa_runtime_spec" in out
+    assert "_q2c_dedicated_kv_cache" in out
+    assert "register_buffer(" in out
+    assert "_q2c_placeholder_shape" in out
+    assert "self.kv_cache = dedicated" in out
+    assert "Q2C dedicated KV must be CUDA BF16" in out
     assert "_q2c_publish_history" in out
     assert "_q2c_restore_history_from_cpu" in out
     assert "main_metadata.slot_mapping" in out
