@@ -160,6 +160,8 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "roundtrip_pages": 0,
         "roundtrip_exact": True,
         "direct_load_verified_pages": 0,
+        "direct_consumer_sync_seconds": 0.0,
+        "direct_consumer_syncs": 0,
         "trace_records": 0,
         "trace_bytes": 0,
         "trace_truncated": False,
@@ -316,6 +318,10 @@ def _publish_completed(
         state["h2d_jobs"] += int(restore.job_id != 0)
         _accumulate_transfer(state, "h2d", restore)
         state["direct_load_verified_pages"] += int(restore.verified_pages)
+        state["direct_consumer_sync_seconds"] += float(
+            restore.consumer_sync_seconds
+        )
+        state["direct_consumer_syncs"] += int(restore.consumer_syncs)
         restored = kv_cache.index_select(0, read_ids) if direct_io else staging[:n]
         exact = _bits_equal(restored, source)
         state["roundtrip_pages"] += n
@@ -390,6 +396,8 @@ def _stage_history(
         state["h2d_jobs"] += int(obs.job_id != 0)
         _accumulate_transfer(state, "h2d", obs)
         state["direct_load_verified_pages"] += int(obs.verified_pages)
+        state["direct_consumer_sync_seconds"] += float(obs.consumer_sync_seconds)
+        state["direct_consumer_syncs"] += int(obs.consumer_syncs)
     else:
         for start in range(0, len(missing), chunk_size):
             pages = missing[start:start + chunk_size]
@@ -400,6 +408,10 @@ def _stage_history(
             state["h2d_jobs"] += int(obs.job_id != 0)
             _accumulate_transfer(state, "h2d", obs)
             state["direct_load_verified_pages"] += int(obs.verified_pages)
+            state["direct_consumer_sync_seconds"] += float(
+                obs.consumer_sync_seconds
+            )
+            state["direct_consumer_syncs"] += int(obs.consumer_syncs)
             read_ids = torch.tensor(
                 [read_base + slot for slot in slots],
                 dtype=torch.int64,
@@ -460,6 +472,7 @@ def run_streaming_runtime(
         ]
         + [
             "d2d_copy_submit_seconds_total",
+            "direct_consumer_sync_seconds_total",
             "publication_oracle_gather_submit_seconds_total",
             "trace_wall_seconds_total",
         ]
@@ -630,6 +643,10 @@ def run_streaming_runtime(
         "direct_load_verified_pages_total": int(
             state["direct_load_verified_pages"]
         ),
+        "direct_consumer_sync_seconds_total": float(
+            state["direct_consumer_sync_seconds"]
+        ),
+        "direct_consumer_syncs_total": int(state["direct_consumer_syncs"]),
         "d2h_bytes_total": int(state["d2h_bytes"]),
         "d2h_jobs_total": int(state["d2h_jobs"]),
         "h2d_bytes_total": int(state["h2d_bytes"]),

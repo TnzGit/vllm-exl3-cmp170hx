@@ -21,7 +21,8 @@ Q2E_TRACE_MAX_BYTES="${K1Q2E_TRACE_MAX_BYTES:-268435456}"
 Q2E_EXPECTED_PLAN_SHA256="${K1Q2E_EXPECTED_PLAN_SHA256:-}"
 Q2E_EXPECTED_TRACE_SHA256="${K1Q2E_EXPECTED_TRACE_SHA256:-}"
 Q2E_EXPECTED_SCHEDULER_DIGEST="${K1Q2E_EXPECTED_SCHEDULER_DIGEST:-}"
-Q2E_VERIFY_MAX_LOGICAL_PAGE="${K1Q2E_VERIFY_MAX_LOGICAL_PAGE:-384}"
+Q2E_VERIFY_MAX_LOGICAL_PAGE="${K1Q2E_VERIFY_MAX_LOGICAL_PAGE:--1}"
+Q2E_DIRECT_CONSUMER_SYNC="${K1Q2E_DIRECT_CONSUMER_SYNC:-1}"
 if [[ "$GPU_MEM_UTIL" != "0.92" || "$MAXLEN" != "161000" || "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2D requires gpu=0.92 maxlen=161000 chunk=1024" >&2
   exit 2
@@ -48,8 +49,12 @@ if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
       exit 2
     fi
   done
-  if [[ ! "$Q2E_VERIFY_MAX_LOGICAL_PAGE" =~ ^[0-9]+$ ]]; then
-    echo "REFUSE: direct I/O byte-oracle limit must be a nonnegative integer" >&2
+  if [[ ! "$Q2E_VERIFY_MAX_LOGICAL_PAGE" =~ ^(-1|[0-9]+)$ ]]; then
+    echo "REFUSE: direct I/O byte-oracle limit must be -1 or nonnegative" >&2
+    exit 2
+  fi
+  if [[ "$Q2E_DIRECT_CONSUMER_SYNC" != "1" ]]; then
+    echo "REFUSE: direct I/O requires the frozen consumer sync" >&2
     exit 2
   fi
 fi
@@ -267,9 +272,11 @@ fi
 if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
   export VLLM_QWEN_KVMEM_Q2E_DIRECT_IO=1
   export VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE="$Q2E_VERIFY_MAX_LOGICAL_PAGE"
+  export VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC=1
 else
   unset VLLM_QWEN_KVMEM_Q2E_DIRECT_IO
   unset VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE
+  unset VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC
 fi
 PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
 VLLM_QWEN_KVMEM_Q2D_RUNTIME_PLAN="$PLAN" \

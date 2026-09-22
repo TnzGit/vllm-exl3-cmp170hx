@@ -83,6 +83,7 @@ def summarize(
         "cpu_roundtrip_pages_total",
         "cpu_roundtrip_exact",
         "direct_load_verified_pages_total",
+        "direct_consumer_syncs_total",
         "d2h_bytes_total",
         "h2d_bytes_total",
         "read_table_mode",
@@ -110,6 +111,7 @@ def summarize(
         "h2d_wait_seconds",
         "h2d_finish_seconds",
         "d2d_copy_submit_seconds",
+        "direct_consumer_sync_seconds",
         "publication_oracle_gather_submit_seconds",
         "trace_wall_seconds",
         "trace_records_total",
@@ -136,7 +138,7 @@ def summarize(
             or (
                 all(float(row["d2d_copy_submit_seconds"]) == 0.0 for row in events)
                 and all(
-                    int(row["direct_load_verified_pages_total"]) > 0
+                    int(row["direct_consumer_syncs_total"]) > 0
                     for row in events
                 )
             )
@@ -391,6 +393,13 @@ def summarize(
         "min_final_direct_load_verified_pages_per_layer": min(
             (
                 int(row["direct_load_verified_pages_total"])
+                for row in final_by_layer.values()
+            ),
+            default=0,
+        ),
+        "min_final_direct_consumer_syncs_per_layer": min(
+            (
+                int(row["direct_consumer_syncs_total"])
                 for row in final_by_layer.values()
             ),
             default=0,

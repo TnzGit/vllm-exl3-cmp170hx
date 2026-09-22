@@ -180,6 +180,8 @@ def test_direct_stage_history_uses_one_arbitrary_destination_job():
         "h2d_bytes": 0,
         "h2d_jobs": 0,
         "direct_load_verified_pages": 0,
+        "direct_consumer_sync_seconds": 0.0,
+        "direct_consumer_syncs": 0,
         **{
             f"h2d_{field}_total": 0.0
             for field in (

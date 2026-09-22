@@ -26,6 +26,8 @@ class TransferObservation:
     wait_seconds: float = 0.0
     finish_seconds: float = 0.0
     verified_pages: int = 0
+    consumer_sync_seconds: float = 0.0
+    consumer_syncs: int = 0
 
     @property
     def event_gib_s(self) -> float:
@@ -305,12 +307,21 @@ class VllmCPUPageBacking:
         submit_seconds = time.perf_counter() - submit_start
 
         verified_pages = 0
+        consumer_sync_seconds = 0.0
+        consumer_syncs = 0
         try:
             wait_start = time.perf_counter()
             self.worker.wait({job_id})
             wait_seconds = time.perf_counter() - wait_start
             finish_start = time.perf_counter()
             result = self._finished(job_id)
+            if os.environ.get("VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC") == "1":
+                import torch
+
+                sync_start = time.perf_counter()
+                torch.cuda.synchronize()
+                consumer_sync_seconds = time.perf_counter() - sync_start
+                consumer_syncs = 1
             verified_pages = self._verify_direct_load(
                 logical_pages,
                 destination_gpu_pages,
@@ -329,6 +340,8 @@ class VllmCPUPageBacking:
             wait_seconds=wait_seconds,
             finish_seconds=finish_seconds,
             verified_pages=verified_pages,
+            consumer_sync_seconds=consumer_sync_seconds,
+            consumer_syncs=consumer_syncs,
         )
 
     def _verify_direct_load(

@@ -26,6 +26,8 @@ def test_streaming_runner_freezes_experiment_and_restores_qsa():
         'K1Q2E_EXPECTED_SCHEDULER_DIGEST',
         'K1Q2E_VERIFY_MAX_LOGICAL_PAGE',
         'VLLM_QWEN_KVMEM_Q2E_VERIFY_MAX_LOGICAL_PAGE',
+        'K1Q2E_DIRECT_CONSUMER_SYNC',
+        'VLLM_QWEN_KVMEM_Q2E_DIRECT_CONSUMER_SYNC',
         '--expected-trace-sha256',
         '--expected-scheduler-digest',
         'VLLM_QWEN_KVMEM_Q2E_TRACE_PATH',

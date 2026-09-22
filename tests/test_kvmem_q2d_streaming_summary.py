@@ -52,6 +52,7 @@ def _worker():
                 "cpu_roundtrip_pages_total": published,
                 "cpu_roundtrip_exact": True,
                 "direct_load_verified_pages_total": 0,
+                "direct_consumer_syncs_total": 0,
                 "d2h_bytes_total": published * 32768,
                 "h2d_bytes_total": published * 32768,
                 "d2h_jobs_total": published,
@@ -80,6 +81,7 @@ def _worker():
                 "h2d_wait_seconds": 0.001,
                 "h2d_finish_seconds": 0.001,
                 "d2d_copy_submit_seconds": 0.001,
+                "direct_consumer_sync_seconds": 0.001,
                 "publication_oracle_gather_submit_seconds": 0.001,
                 "trace_wall_seconds": 0.001,
                 "trace_records_total": published + 1,
@@ -243,6 +245,7 @@ def test_streaming_summary_gates_expected_direct_io_mode():
         if row["event"] == "q2d_streaming_runtime":
             row["d2d_copy_submit_seconds"] = 0.0
             row["direct_load_verified_pages_total"] = 1
+            row["direct_consumer_syncs_total"] = 1
     result = _load().summarize(
         _response(), rows, _scheduler(), _plan(), None,
         "direct_dedicated_slots",
