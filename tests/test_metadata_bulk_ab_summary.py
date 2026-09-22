@@ -66,6 +66,9 @@ def test_metadata_bulk_summary_valid_balanced_positive():
     assert out["classification"] == "METADATA_BULK_AB_POSITIVE"
     assert out["comparison"]["deferred_vs_control_speedup"] == 2.0
     assert out["comparison"]["gpu_call_reduction"] == 5.0
+    assert out["comparison"]["projected_metadata_saved_s"] == 3.0
+    assert out["comparison"]["projected_all_control_main_weights_s"] == 11.5
+    assert out["comparison"]["projected_all_deferred_main_weights_s"] == 8.5
     assert out["by_suffix"]["mul1"]["commit_bytes_exact"] is True
 
 
