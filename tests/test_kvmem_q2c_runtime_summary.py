@@ -42,6 +42,11 @@ def _worker(layer):
         "d2h_bytes": 4 * 32768, "d2h_jobs": 2,
         "h2d_bytes": 4 * 32768, "h2d_jobs": 2,
         "staging_pages": 2, "staging_bytes": 2 * 32768,
+        "dedicated_bound": True,
+        "dedicated_pages": 7,
+        "dedicated_bytes": 7 * 32768,
+        "virtual_null_block_id": 6,
+        "placeholder_bytes": 32768,
     }
 
 
