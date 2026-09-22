@@ -27,6 +27,7 @@ def _q2b():
         "apply_min_pos": 160000,
         "active_from_pos": 160000,
         "active_page0": 10000,
+        "active_reserve_tokens": 1024,
         "active_reserve_pages": 64,
         "physical_page_count": 4160,
         "publication_staging_pages": 128,
