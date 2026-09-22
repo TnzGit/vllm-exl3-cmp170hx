@@ -82,10 +82,20 @@ def summarize(
     hist_total = sum(int(r["historical_selected"]) for r in shrunk_worker)
     hist_kept = sum(int(r["historical_resident_kept"]) for r in shrunk_worker)
     hist_dropped = sum(int(r["historical_selected_dropped"]) for r in shrunk_worker)
+    prefill_hist = sum(
+        int(r.get("prefill_historical_selected", 0))
+        for r in by_layer.values()
+    )
+    prefill_dropped = sum(
+        int(r.get("prefill_historical_selected_dropped", 0))
+        for r in by_layer.values()
+    )
     visibility_gate = bool(
         shrunk_worker
         and hist_total == hist_kept + hist_dropped
         and hist_dropped > 0
+        and prefill_hist > 0
+        and prefill_dropped > 0
     )
 
     semantic_gate = bool(
@@ -109,9 +119,9 @@ def summarize(
     elif not visibility_gate:
         classification = "Q2C_VISIBILITY_NO_GO"
     elif not semantic_gate:
-        classification = "Q2C_SEMANTIC_NO_GO"
+        classification = "Q2C_FROZEN_PLAN_SEMANTIC_NO_GO"
     else:
-        classification = "Q2C_SCHEDULER_OWNERSHIP_SEMANTIC_GO"
+        classification = "Q2C_FROZEN_PLAN_OWNERSHIP_SEMANTIC_GO"
 
     transition = boundary_rows[0] if boundary_rows else {}
     return {
@@ -185,21 +195,24 @@ def summarize(
             "historical_selected": hist_total,
             "historical_resident_kept": hist_kept,
             "historical_selected_dropped": hist_dropped,
+            "prefill_historical_selected": prefill_hist,
+            "prefill_historical_selected_dropped": prefill_dropped,
             "historical_visibility_rate": (
                 hist_kept / hist_total if hist_total else 1.0
             ),
         },
         "interpretation": {
             "proven_if_go": (
-                "One live request progressively reclaims processed nonresident "
-                "QSA history while keeping a full logical row; scheduler ownership "
-                "never exceeds 4160 real QSA pages under the 1024-token chunk gate; "
-                "retained history survives generic CPU backing restore; "
-                "active writes and sparse reads use the same scheduler-owned cache; "
-                "target semantics survive."
+                "One live 160K request applies the frozen K1B turn-specific "
+                "64K visibility plan throughout prefill, progressively reclaims "
+                "processed nonresident QSA pages while preserving the logical row, "
+                "keeps scheduler ownership <=4160 real pages, restores retained "
+                "history byte-exactly through generic CPU backing, and preserves "
+                "the frozen target semantics."
             ),
             "not_proven": [
-                "cold-prefill peak QSA allocation is bounded from token zero",
+                "a production planner can choose the same resident set causally without future-turn knowledge",
+                "exact hidden-state or token parity versus the full-history baseline",
                 "multi-request concurrency improvement",
                 "240K runtime",
                 "MTP follower correctness",
