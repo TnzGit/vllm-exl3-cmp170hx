@@ -34,6 +34,7 @@ def _worker(layer):
         "resident_history_pages": 4, "active_real_pages": 2,
         "virtual_id_range_ok": True, "resident_ids_valid": True,
         "worker_table_mode": "append_only_virtual_ids",
+        "write_mapping_exact": True, "write_mapping_compared": 160,
         "historical_selected": 10, "historical_resident_kept": 4,
         "historical_selected_dropped": 6,
         "prefill_historical_selected": 100,
@@ -84,6 +85,7 @@ def test_q2c_runtime_summary_go():
     assert out["scheduler"]["peak_within_cap"] is True
     assert out["scheduler"]["reclaimed_pages_total"] == 1
     assert out["worker_block_table_gate"] is True
+    assert out["worker"]["write_mapping_exact_all"] is True
     assert out["cpu_authority_gate"] is True
     assert out["visibility_gate"] is True
     assert out["semantic_gate"] is True

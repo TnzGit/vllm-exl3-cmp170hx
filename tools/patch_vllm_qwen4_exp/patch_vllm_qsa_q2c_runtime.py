@@ -99,11 +99,6 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
     page_tokens = int(plan["page_tokens"])
     pos = positions.to(device=selected.device, dtype=torch.int64)
     valid = selected >= 0
-    apply_rows = pos >= int(plan["apply_min_pos"])
-    if not bool(valid.any().item()):
-        return apply_rows, 0, 0, 0
-
-    first_query_page = int(pos.min().item()) // page_tokens if pos.numel() else 0
     logical = selected.clamp_min(0).to(torch.int64)
     pages = torch.div(logical, page_tokens, rounding_mode="floor")
     if bool(valid.any().item()):
@@ -117,15 +112,18 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
     resident_pages = _q2c_tensor(
         plan, "resident_pages", plan["resident_pages"], selected.device
     )
-    keep_resident = torch.isin(pages, resident_pages)
-    historical = logical < int(plan["active_from_pos"])
-    processed_history = pages < first_query_page
-    drop = valid & historical & processed_history & ~keep_resident
-
-    historical_total = int((valid & historical).sum().item())
-    dropped = int(drop.sum().item())
-    historical_kept = historical_total - dropped
-    selected.masked_fill_(drop, -1)
+    from vllm_exl3.kvmem_q2c_attribution import apply_progressive_visibility
+    observation = apply_progressive_visibility(
+        plan,
+        selected,
+        pos,
+        apply_mask=True,
+        resident_pages_tensor=resident_pages,
+    )
+    historical_total = int(observation["historical_total"])
+    dropped = int(observation["actual_dropped"])
+    historical_kept = int(observation["historical_kept_if_masked"])
+    apply_rows = pos >= int(plan["apply_min_pos"])
 
     if bool((pos < int(plan["apply_min_pos"])).any().item()):
         layer._q2c_prefill_dropped = int(
@@ -134,7 +132,41 @@ def _q2c_apply_visibility(layer, plan, selected, positions, block_table):
         layer._q2c_prefill_historical = int(
             getattr(layer, "_q2c_prefill_historical", 0)
         ) + historical_total
-    return apply_rows, historical_total, historical_kept, dropped
+    return apply_rows, historical_total, historical_kept, dropped, observation
+
+
+def _q2c_validate_write_mapping(layer, plan, positions, main_metadata):
+    """Prove each current write slot addresses its logical QSA page."""
+    pos = positions.to(
+        device=main_metadata.block_table.device, dtype=torch.int64
+    ).reshape(-1)
+    page_tokens = int(plan["page_tokens"])
+    logical_pages = torch.div(pos, page_tokens, rounding_mode="floor")
+    if logical_pages.numel() and int(logical_pages.max().item()) >= int(
+        main_metadata.block_table.shape[1]
+    ):
+        raise RuntimeError("Q2C current write exceeds block-table width")
+    physical = main_metadata.block_table[0].index_select(0, logical_pages)
+    expected = physical.to(torch.int64) * page_tokens + torch.remainder(
+        pos, page_tokens
+    )
+    actual = main_metadata.slot_mapping[: pos.numel()].to(
+        device=expected.device, dtype=torch.int64
+    )
+    exact = bool(torch.equal(actual, expected))
+    layer._q2c_write_mapping_compared = int(
+        getattr(layer, "_q2c_write_mapping_compared", 0)
+    ) + int(pos.numel())
+    layer._q2c_write_mapping_exact = bool(
+        getattr(layer, "_q2c_write_mapping_exact", True)
+    ) and exact
+    if not exact:
+        bad = int(torch.nonzero(actual != expected, as_tuple=False)[0, 0].item())
+        raise RuntimeError(
+            "Q2C slot mapping mismatch "
+            f"logical_pos={int(pos[bad].item())} "
+            f"actual={int(actual[bad].item())} expected={int(expected[bad].item())}"
+        )
 
 
 def _q2c_table_evidence(layer, plan, block_table, positions):
@@ -318,6 +350,8 @@ def _q2c_run(
     if query.is_cuda and torch.cuda.is_current_stream_capturing():
         raise RuntimeError("Q2C runtime requires eager execution")
 
+    _q2c_validate_write_mapping(layer, plan, positions, main_metadata)
+
     # Writes always use scheduler ownership. Before transition this is the full
     # logical QSA row; after transition it addresses only retained/active real
     # blocks while null holes remain in the logical row.
@@ -342,7 +376,7 @@ def _q2c_run(
     # Apply the bounded visibility policy on every forward. Before the frozen
     # query boundary this masks only pages the scheduler has already reclaimed;
     # current work pages remain real and visible.
-    apply_rows, hist_total, hist_kept, dropped = _q2c_apply_visibility(
+    apply_rows, hist_total, hist_kept, dropped, attribution = _q2c_apply_visibility(
         layer, plan, selected, positions, main_metadata.block_table
     )
 
@@ -356,6 +390,19 @@ def _q2c_run(
         output,
         token_to_req=side_metadata.token_to_req,
     )
+
+    if os.environ.get("VLLM_QWEN_KVMEM_Q2C_ATTRIB_STATS_PATH"):
+        from vllm_exl3.kvmem_q2c_attribution import (
+            tensor_bit_fingerprint,
+            write_attribution_event,
+        )
+        write_attribution_event({
+            "event": "q2c_selection",
+            "mode": "c_bounded",
+            "layer": layer.layer_name,
+            **attribution,
+            **tensor_bit_fingerprint(output),
+        })
 
     if bool(apply_rows.any().item()):
         _q2c_stats(
@@ -372,6 +419,12 @@ def _q2c_run(
                 "virtual_id_range_ok": bool(evidence["virtual_id_range_ok"]),
                 "resident_ids_valid": bool(evidence["resident_ids_valid"]),
                 "worker_table_mode": evidence["worker_table_mode"],
+                "write_mapping_exact": bool(
+                    getattr(layer, "_q2c_write_mapping_exact", False)
+                ),
+                "write_mapping_compared": int(
+                    getattr(layer, "_q2c_write_mapping_compared", 0)
+                ),
                 "historical_selected": int(hist_total),
                 "historical_resident_kept": int(hist_kept),
                 "historical_selected_dropped": int(dropped),

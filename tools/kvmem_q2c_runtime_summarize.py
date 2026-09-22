@@ -74,6 +74,11 @@ def summarize(
             r.get("worker_table_mode") == "append_only_virtual_ids"
             for r in by_layer.values()
         )
+        and all(bool(r.get("write_mapping_exact")) for r in by_layer.values())
+        and all(
+            int(r.get("write_mapping_compared", 0)) > 0
+            for r in by_layer.values()
+        )
         and all(bool(r.get("dedicated_bound")) for r in by_layer.values())
         and all(
             int(r.get("dedicated_pages", 0)) == expected_dedicated_pages
@@ -205,6 +210,13 @@ def summarize(
             "resident_ids_valid_all": all(
                 bool(r.get("resident_ids_valid")) for r in by_layer.values()
             ),
+            "write_mapping_exact_all": all(
+                bool(r.get("write_mapping_exact")) for r in by_layer.values()
+            ),
+            "write_mapping_compared_by_layer": {
+                k: int(v.get("write_mapping_compared", 0))
+                for k, v in by_layer.items()
+            },
             "worker_table_modes": sorted(
                 {str(r.get("worker_table_mode")) for r in by_layer.values()}
             ),

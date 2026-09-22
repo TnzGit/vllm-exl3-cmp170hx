@@ -100,6 +100,7 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             reversed(range(kv_cache_spec.physical_page_cap))
         )
         self._virtual_free_set = set(range(kv_cache_spec.physical_page_cap))
+        self._virtual_generation = [0] * kv_cache_spec.physical_page_cap
         self._null_block = self._virtual_null_block
         self._record_new_block_ids = False
         self.new_block_ids = []
@@ -158,6 +159,7 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             if block_id not in self._virtual_free_set:
                 raise RuntimeError("Q2C virtual free-list corruption")
             self._virtual_free_set.remove(block_id)
+            self._virtual_generation[block_id] += 1
             block = self._virtual_blocks[block_id]
             if block.ref_cnt != 0 or block.is_null:
                 raise RuntimeError("Q2C virtual block was not free")
@@ -254,6 +256,18 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
         fresh = self._alloc_virtual(len(missing))
         for idx, block in zip(missing, fresh, strict=True):
             blocks[idx] = block
+        if fresh:
+            _write_scheduler_event({
+                "event": "q2c_scheduler_assign",
+                "request_id": request_id,
+                "logical_pages": missing,
+                "virtual_ids": [int(block.block_id) for block in fresh],
+                "generations": [
+                    int(self._virtual_generation[int(block.block_id)])
+                    for block in fresh
+                ],
+                "physical_page_cap": self.spec.physical_page_cap,
+            })
 
         previous_peak = self._peak_real_pages.get(request_id, 0)
         real = self._record_peak(request_id)
@@ -308,11 +322,13 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
             self.spec.active_page0,
         )
         freed: list[KVCacheBlock] = []
+        freed_logical_pages: list[int] = []
         for idx in range(historical_end):
             block = blocks[idx]
             if idx in self._resident_set or block.is_null:
                 continue
             freed.append(block)
+            freed_logical_pages.append(idx)
             blocks[idx] = self._null_block
         if freed:
             self._free_virtual(freed)
@@ -327,6 +343,8 @@ class QSAResidentRuntimeManager(SingleTypeKVCacheManager):
                 "real_pages_before": before,
                 "real_pages_after": after,
                 "freed_pages": len(freed),
+                "freed_logical_pages": freed_logical_pages,
+                "freed_virtual_ids": [int(block.block_id) for block in freed],
                 "physical_page_cap": self.spec.physical_page_cap,
                 "peak_real_pages": self._peak_real_pages.get(request_id, after),
             })

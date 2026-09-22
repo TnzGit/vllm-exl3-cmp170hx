@@ -48,6 +48,10 @@ def test_q2c_patch_contains_scheduler_owned_contract():
     assert "_q2c_restore_history_from_cpu" in out
     assert "main_metadata.slot_mapping" in out
     assert "main_metadata.block_table" in out
+    assert "_q2c_validate_write_mapping" in out
+    assert "write_mapping_exact" in out
+    assert "apply_progressive_visibility" in out
+    assert '"mode": "c_bounded"' in out
     assert "worker_unique_virtual_ids" in out
     assert "append_only_virtual_ids" in out
     assert "torch.isin" in out

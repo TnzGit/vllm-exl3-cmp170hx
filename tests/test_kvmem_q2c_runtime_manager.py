@@ -128,8 +128,19 @@ def test_progressive_prefill_never_exceeds_4160_and_keeps_logical_holes(
 
     rows = [json.loads(x) for x in stats.read_text().splitlines()]
     reclaim = [x for x in rows if x["event"] == "q2c_scheduler_reclaim"]
+    assign = [x for x in rows if x["event"] == "q2c_scheduler_assign"]
     boundary = [x for x in rows if x["event"] == "q2c_scheduler_boundary"]
     assert sum(x["freed_pages"] for x in reclaim) == 5904
+    assert sum(len(x["logical_pages"]) for x in assign) == 10000
+    assert all(
+        len(x["logical_pages"]) == len(x["virtual_ids"]) == len(x["generations"])
+        for x in assign
+    )
+    assert all(
+        len(x["freed_logical_pages"]) == len(x["freed_virtual_ids"])
+        == x["freed_pages"]
+        for x in reclaim
+    )
     assert len(boundary) == 1
     assert boundary[0]["logical_row_pages"] == 10000
     assert 4096 <= boundary[0]["real_pages_at_boundary"] <= 4160
