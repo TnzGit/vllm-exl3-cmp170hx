@@ -57,6 +57,61 @@ def test_roundtrip_and_aggregate(tmp_path: Path) -> None:
     assert summary.bytes == trace.stat().st_size
 
 
+def test_worker_api_writes_identical_bytes_and_encodes_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    direct_trace = tmp_path / "direct.q2e"
+    worker_trace = tmp_path / "worker.q2e"
+    record = Q2ETraceRecord(
+        layer_id=3,
+        first_pos=1000,
+        subbatch_start=64,
+        query_rows=64,
+        history_pages=(1, 2, 9),
+        missing_pages=(20, 21),
+        victim_pages=(7,),
+        assigned_slots=(4, 5),
+        assigned_generations=(12, 13),
+    )
+    original_to_bytes = Q2ETraceRecord.to_bytes
+    expected_record_bytes = len(original_to_bytes(record))
+    calls = 0
+
+    def counted_to_bytes(self: Q2ETraceRecord) -> bytes:
+        nonlocal calls
+        calls += 1
+        return original_to_bytes(self)
+
+    monkeypatch.setattr(Q2ETraceRecord, "to_bytes", counted_to_bytes)
+    with Q2ETraceWriter(direct_trace, max_bytes=4096) as writer:
+        assert writer.append(record)
+    direct_bytes = direct_trace.read_bytes()
+    assert calls == 1
+
+    calls = 0
+    result = write_trace_record(
+        worker_trace,
+        4096,
+        layer_id=record.layer_id,
+        first_pos=record.first_pos,
+        subbatch_start=record.subbatch_start,
+        query_rows=record.query_rows,
+        history_pages=record.history_pages,
+        missing_pages=record.missing_pages,
+        victim_pages=record.victim_pages,
+        assigned_slots=record.assigned_slots,
+        assigned_generations=record.assigned_generations,
+    )
+    close_trace_writers()
+
+    assert result["written"] is True
+    assert result["record_bytes"] == expected_record_bytes
+    assert calls == 1
+    assert worker_trace.read_bytes() == direct_bytes
+    assert read_trace_records(worker_trace) == (record,)
+    assert read_trace(worker_trace) == read_trace(direct_trace)
+
+
 def test_corruption_and_trailing_junk_are_rejected(tmp_path: Path) -> None:
     trace = tmp_path / "access.q2e"
     with Q2ETraceWriter(trace) as writer:
@@ -178,6 +233,46 @@ def test_worker_api_caches_writer_flushes_and_reports_truncation(tmp_path: Path)
     assert second["truncated"] is True
     assert read_trace(trace).truncated is True
     close_trace_writers()
+
+
+def test_worker_api_truncated_bytes_keep_validation_behavior(tmp_path: Path) -> None:
+    trace = tmp_path / "worker-malformed.q2e"
+    record_bytes = len(_record().to_bytes())
+    cap = HEADER_STRUCT.size + record_bytes + 1
+    write_trace_record(
+        trace,
+        cap,
+        layer_id=3,
+        first_pos=1000,
+        subbatch_start=64,
+        query_rows=64,
+        history_pages=(1, 2, 9),
+        missing_pages=(20, 21),
+        victim_pages=(7,),
+        assigned_slots=(4, 5),
+        assigned_generations=(12, 13),
+    )
+    write_trace_record(
+        trace,
+        cap,
+        layer_id=4,
+        first_pos=2000,
+        subbatch_start=0,
+        query_rows=1,
+    )
+    close_trace_writers()
+
+    original = trace.read_bytes()
+    assert read_trace(trace).truncated is True
+    corrupted = bytearray(original)
+    corrupted[-1] ^= 0x01
+    trace.write_bytes(corrupted)
+    with pytest.raises(TraceFormatError, match="CRC"):
+        read_trace(trace)
+
+    trace.write_bytes(original[:-1])
+    with pytest.raises(TraceFormatError, match="record length"):
+        read_trace(trace)
 
 
 def test_worker_api_rejects_cap_change_for_open_path(tmp_path: Path) -> None:

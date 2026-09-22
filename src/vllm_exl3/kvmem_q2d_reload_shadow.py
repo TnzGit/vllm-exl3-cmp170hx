@@ -152,18 +152,26 @@ def _assign_many(
     if len(set(pages)) != len(pages):
         raise RuntimeError("Q2D bulk slot assignment contains duplicate pages")
     missing = [page for page in pages if page not in state["logical_to_slot"]]
-    free = [
-        slot for slot, logical in enumerate(state["slot_to_logical"])
-        if logical is None
-    ]
+    if not missing:
+        return [int(state["logical_to_slot"][page]) for page in pages]
+    free: list[int] = []
+    for slot, logical in enumerate(state["slot_to_logical"]):
+        if logical is None:
+            free.append(slot)
+            if len(free) == len(missing):
+                break
     need_victims = max(0, len(missing) - len(free))
-    victims = sorted(
-        (
-            int(logical) for logical in state["logical_to_slot"]
-            if int(logical) not in protected
-        ),
-        key=lambda logical: state["last_use"].get(logical, -1),
-    )[:need_victims]
+    victims = (
+        sorted(
+            (
+                int(logical) for logical in state["logical_to_slot"]
+                if int(logical) not in protected
+            ),
+            key=lambda logical: state["last_use"].get(logical, -1),
+        )[:need_victims]
+        if need_victims
+        else []
+    )
     if len(free) + len(victims) < len(missing):
         raise RuntimeError("Q2D reload pool has insufficient evictable slots")
     available = list(free)

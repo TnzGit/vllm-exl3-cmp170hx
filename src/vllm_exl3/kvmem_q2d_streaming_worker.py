@@ -32,6 +32,11 @@ _CUMULATIVE_TIMING_FIELDS = tuple(
     "d2d_copy_submit_seconds_total",
     "direct_consumer_sync_seconds_total",
     "publication_oracle_gather_submit_seconds_total",
+    "stage_residency_lookup_seconds_total",
+    "stage_slot_assignment_seconds_total",
+    "stage_transfer_call_seconds_total",
+    "stage_table_delta_seconds_total",
+    "stage_touch_seconds_total",
     "trace_wall_seconds_total",
 )
 
@@ -464,24 +469,36 @@ def _stage_history(
     history_pages: list[int],
     kv_cache: torch.Tensor,
 ) -> tuple[int, list[int], list[int], list[int], list[int]]:
+    lookup_start = time.perf_counter()
     missing = [page for page in history_pages if page not in state["logical_to_slot"]]
     absent = [page for page in missing if page not in state["published"]]
+    state["stage_residency_lookup_seconds_total"] = float(
+        state.get("stage_residency_lookup_seconds_total", 0.0)
+    ) + (time.perf_counter() - lookup_start)
     if absent:
         raise RuntimeError(f"Q2D selected history is not CPU-authoritative: {absent[:8]}")
-    before_slots = list(state["slot_to_logical"])
-    local_slots = _assign_many(state, missing, set(history_pages))
+    assignment_start = time.perf_counter()
     generations: list[int] = []
     victims: list[int] = []
-    for page, slot in zip(missing, local_slots, strict=True):
-        previous = before_slots[slot]
-        if previous != page:
-            state["slot_generations"][slot] += 1
-            if previous is not None:
-                victims.append(int(previous))
-        generations.append(int(state["slot_generations"][slot]))
+    if missing:
+        before_slots = list(state["slot_to_logical"])
+        local_slots = _assign_many(state, missing, set(history_pages))
+        for page, slot in zip(missing, local_slots, strict=True):
+            previous = before_slots[slot]
+            if previous != page:
+                state["slot_generations"][slot] += 1
+                if previous is not None:
+                    victims.append(int(previous))
+            generations.append(int(state["slot_generations"][slot]))
+    else:
+        local_slots = []
+    state["stage_slot_assignment_seconds_total"] = float(
+        state.get("stage_slot_assignment_seconds_total", 0.0)
+    ) + (time.perf_counter() - assignment_start)
     staging = layer._q2d_staging
     chunk_size = int(staging.shape[0])
     read_base = int(plan["write_page_count"])
+    transfer_start = time.perf_counter()
     if missing and bool(state["direct_io"]):
         direct_read_ids = [read_base + slot for slot in local_slots]
         obs = state["backing"].stage_in(missing, direct_read_ids)
@@ -517,14 +534,26 @@ def _stage_history(
             state["d2d_copy_submit_seconds_total"] += (
                 time.perf_counter() - copy_start
             )
+    state["stage_transfer_call_seconds_total"] = float(
+        state.get("stage_transfer_call_seconds_total", 0.0)
+    ) + (time.perf_counter() - transfer_start)
     current_write_pages = set(int(page) for page in state["current_write_pages"])
-    _update_dynamic_table(
-        state["dynamic_table"],
-        clear_pages=[page for page in victims if page not in current_write_pages],
-        mapped_pages=missing,
-        physical_pages=[read_base + slot for slot in local_slots],
-    )
+    table_delta_start = time.perf_counter()
+    if missing or victims:
+        _update_dynamic_table(
+            state["dynamic_table"],
+            clear_pages=[page for page in victims if page not in current_write_pages],
+            mapped_pages=missing,
+            physical_pages=[read_base + slot for slot in local_slots],
+        )
+    state["stage_table_delta_seconds_total"] = float(
+        state.get("stage_table_delta_seconds_total", 0.0)
+    ) + (time.perf_counter() - table_delta_start)
+    touch_start = time.perf_counter()
     _touch(state, history_pages)
+    state["stage_touch_seconds_total"] = float(
+        state.get("stage_touch_seconds_total", 0.0)
+    ) + (time.perf_counter() - touch_start)
     state["peak_read_slots"] = max(
         int(state["peak_read_slots"]), len(state["logical_to_slot"])
     )

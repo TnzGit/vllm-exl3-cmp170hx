@@ -241,7 +241,14 @@ class Q2ETraceWriter:
             raise TypeError("record must be a Q2ETraceRecord")
         if self.truncated:
             return False
-        encoded = record.to_bytes()
+        return self._append_encoded(record.to_bytes())
+
+    def _append_encoded(self, encoded: bytes) -> bool:
+        """Append an already-encoded record without changing write semantics."""
+        if self._closed:
+            raise ValueError("cannot append to a closed trace")
+        if self.truncated:
+            return False
         if self.bytes_written + len(encoded) > self.max_bytes:
             self.truncated = True
             self._persist_truncated_flag()
@@ -442,7 +449,7 @@ def write_trace_record(
         assigned_slots=assigned_slots,
         assigned_generations=assigned_generations,
     )
-    record_bytes = len(record.to_bytes())
+    encoded = record.to_bytes()
     key = Path(path).expanduser().resolve(strict=False)
     cached = _TRACE_WRITERS.get(key)
     if cached is None:
@@ -455,11 +462,11 @@ def write_trace_record(
                 f"trace {key} already uses max_bytes={cached_max_bytes}, "
                 f"cannot change it to {max_bytes} while open"
             )
-    written = writer.append(record)
+    written = writer._append_encoded(encoded)
     return {
         "written": written,
         "truncated": writer.truncated,
-        "record_bytes": record_bytes,
+        "record_bytes": len(encoded),
     }
 
 

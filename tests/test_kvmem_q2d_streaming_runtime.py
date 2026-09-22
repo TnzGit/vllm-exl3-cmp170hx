@@ -201,6 +201,7 @@ def test_persistent_dynamic_table_applies_deltas_and_forward_write_view():
 
 def test_direct_io_flag_is_strict(monkeypatch):
     assert "direct_consumer_sync_seconds_total" in _CUMULATIVE_TIMING_FIELDS
+    assert "stage_slot_assignment_seconds_total" in _CUMULATIVE_TIMING_FIELDS
     monkeypatch.delenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", raising=False)
     assert _direct_io_enabled() is False
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2E_DIRECT_IO", "1")

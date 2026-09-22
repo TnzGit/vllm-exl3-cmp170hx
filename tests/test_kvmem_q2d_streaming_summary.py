@@ -83,6 +83,11 @@ def _worker():
                 "d2d_copy_submit_seconds": 0.001,
                 "direct_consumer_sync_seconds": 0.001,
                 "publication_oracle_gather_submit_seconds": 0.001,
+                "stage_residency_lookup_seconds": 0.001,
+                "stage_slot_assignment_seconds": 0.001,
+                "stage_transfer_call_seconds": 0.001,
+                "stage_table_delta_seconds": 0.001,
+                "stage_touch_seconds": 0.001,
                 "trace_wall_seconds": 0.001,
                 "trace_records_total": published + 1,
                 "trace_bytes_total": 100,
@@ -280,16 +285,27 @@ def test_streaming_summary_can_require_dynamic_table_oracle():
     )
     assert result["dynamic_table_oracle_gate"] is False
     rows = _rows()
+    checks = {"l0": 0, "l1": 0}
     for row in rows:
         if row.get("event") == "q2d_streaming_runtime":
+            checks[row["layer"]] += int(row["split_calls"])
             row["dynamic_table_oracle_enabled"] = True
-            row["dynamic_table_oracle_checks_total"] = 1
+            row["dynamic_table_oracle_checks_total"] = checks[row["layer"]]
             row["dynamic_table_oracle_pages_total"] = 1
     result = _load().summarize(
         _response(), rows, _scheduler(), _plan(),
         require_dynamic_table_oracle=True,
     )
     assert result["dynamic_table_oracle_gate"] is True
+    assert result["dynamic_table_oracle_check_mismatches"] == 0
+
+    rows[-1]["dynamic_table_oracle_checks_total"] -= 1
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(),
+        require_dynamic_table_oracle=True,
+    )
+    assert result["dynamic_table_oracle_gate"] is False
+    assert result["dynamic_table_oracle_check_mismatches"] == 1
 
 
 def test_streaming_summary_gates_expected_direct_io_mode():

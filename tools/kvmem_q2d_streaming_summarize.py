@@ -149,6 +149,11 @@ def summarize(
         "d2d_copy_submit_seconds",
         "direct_consumer_sync_seconds",
         "publication_oracle_gather_submit_seconds",
+        "stage_residency_lookup_seconds",
+        "stage_slot_assignment_seconds",
+        "stage_transfer_call_seconds",
+        "stage_table_delta_seconds",
+        "stage_touch_seconds",
         "trace_wall_seconds",
         "trace_records_total",
         "trace_bytes_total",
@@ -220,15 +225,25 @@ def summarize(
             for row in final_by_layer.values()
         )
     )
+    expected_oracle_checks_by_layer = {
+        layer: sum(
+            int(row["split_calls"])
+            for row in events
+            if str(row["layer"]) == layer
+        )
+        for layer in layers
+    }
     dynamic_table_oracle_gate = bool(
         not require_dynamic_table_oracle
         or (
             len(final_by_layer) == expected_layers
+            and all(bool(row.get("dynamic_table_oracle_enabled")) for row in events)
             and all(
                 bool(row.get("dynamic_table_oracle_enabled"))
-                and int(row.get("dynamic_table_oracle_checks_total", 0)) > 0
+                and int(row.get("dynamic_table_oracle_checks_total", -1))
+                == expected_oracle_checks_by_layer[layer]
                 and int(row.get("dynamic_table_oracle_pages_total", 0)) > 0
-                for row in final_by_layer.values()
+                for layer, row in final_by_layer.items()
             )
         )
     )
@@ -481,6 +496,14 @@ def summarize(
                 for row in final_by_layer.values()
             ),
             default=0,
+        ),
+        "min_expected_dynamic_table_oracle_checks_per_layer": min(
+            expected_oracle_checks_by_layer.values(), default=0
+        ),
+        "dynamic_table_oracle_check_mismatches": sum(
+            int(final_by_layer[layer].get("dynamic_table_oracle_checks_total", -1))
+            != expected
+            for layer, expected in expected_oracle_checks_by_layer.items()
         ),
         "min_final_dynamic_table_oracle_pages_per_layer": min(
             (

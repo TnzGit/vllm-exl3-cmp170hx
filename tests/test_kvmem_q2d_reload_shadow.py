@@ -95,3 +95,21 @@ def test_bulk_lru_assigns_all_misses_with_one_victim_selection():
     slots = _assign_many(state, [2, 5, 6], {2, 5, 6})
     assert len(set(slots)) == 3
     assert set(state["logical_to_slot"]) == {2, 4, 5, 6}
+
+
+def test_bulk_assignment_zero_miss_and_free_slots_preserve_exact_order():
+    state = _lru_state(4)
+    assert _assign_many(state, [10, 11], {10, 11}) == [0, 1]
+    _touch(state, [10, 11])
+    before = (
+        dict(state["logical_to_slot"]),
+        list(state["slot_to_logical"]),
+        dict(state["last_use"]),
+    )
+    assert _assign_many(state, [11, 10], {10, 11}) == [1, 0]
+    assert before == (
+        state["logical_to_slot"],
+        state["slot_to_logical"],
+        state["last_use"],
+    )
+    assert _assign_many(state, [12, 13], {12, 13}) == [2, 3]
