@@ -120,7 +120,9 @@ def _q2c_table_evidence(layer, plan, block_table, positions):
     logical_pages = min(logical_pages, int(block_table.shape[1]))
     active_page0 = int(plan["active_page0"])
     resident = [int(x) for x in plan["resident_pages"] if int(x) < logical_pages]
-    resident_idx = _q2c_tensor(plan, "resident_pages", resident, block_table.device)
+    resident_idx = _q2c_tensor(
+        plan, f"resident_pages_prefix_{len(resident)}", resident, block_table.device
+    )
     resident_ids = (
         block_table[0].index_select(0, resident_idx).to(torch.int64)
         if resident else torch.empty(0, dtype=torch.int64, device=block_table.device)
