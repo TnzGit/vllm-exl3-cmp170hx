@@ -242,6 +242,37 @@ def test_streaming_summary_gates_paired_policy_digests():
     assert result["paired_policy_gate"] is False
 
 
+def test_scheduler_policy_digest_excludes_completion_length():
+    baseline = _load().summarize(
+        _response(), _rows(), _scheduler(), _plan()
+    )
+    longer = _scheduler() + [
+        {
+            "event": "q2d_scheduler_assign",
+            "logical_pages": [2],
+            "write_ids": [2],
+            "real_write_pages": 2,
+            "peak_real_write_pages": 2,
+        },
+        {
+            "event": "q2d_scheduler_reclaim",
+            "processed_computed_tokens": 32,
+            "freed_logical_pages": [1],
+            "freed_write_ids": [1],
+            "freed_pages": 1,
+            "real_write_pages": 1,
+            "peak_real_write_pages": 2,
+        },
+    ]
+    result = _load().summarize(_response(), _rows(), longer, _plan())
+    assert result["scheduler_policy_digest"] == baseline["scheduler_policy_digest"]
+    assert (
+        result["scheduler_full_request_digest"]
+        != baseline["scheduler_full_request_digest"]
+    )
+    assert result["scheduler_prefill_boundary_gate"] is True
+
+
 def test_streaming_summary_gates_expected_direct_io_mode():
     rows = _rows()
     for row in rows:

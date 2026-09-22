@@ -16,6 +16,41 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def _prefill_scheduler_rows(
+    scheduler_rows: list[dict[str, Any]],
+    prompt_tokens: int,
+    page_tokens: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Select the frozen prefill policy, excluding output-length-dependent decode."""
+    prompt_pages = math.ceil(prompt_tokens / page_tokens)
+    published_pages = prompt_tokens // page_tokens
+    selected: list[dict[str, Any]] = []
+    boundary_clean = True
+    for row in scheduler_rows:
+        event = row.get("event")
+        if event == "q2d_scheduler_assign":
+            pages = [int(page) for page in row.get("logical_pages", [])]
+            if any(page < prompt_pages for page in pages) and any(
+                page >= prompt_pages for page in pages
+            ):
+                boundary_clean = False
+            if pages and all(page < prompt_pages for page in pages):
+                selected.append(row)
+        elif event == "q2d_scheduler_reclaim":
+            pages = [int(page) for page in row.get("freed_logical_pages", [])]
+            if any(page < published_pages for page in pages) and any(
+                page >= published_pages for page in pages
+            ):
+                boundary_clean = False
+            if pages:
+                if all(page < published_pages for page in pages):
+                    selected.append(row)
+            elif int(row.get("processed_computed_tokens", 0)) <= prompt_tokens:
+                # Compatibility for older synthetic fixtures without page IDs.
+                selected.append(row)
+    return selected, boundary_clean
+
+
 def summarize(
     response: dict[str, Any],
     worker_rows: list[dict[str, Any]],
@@ -214,9 +249,23 @@ def summarize(
         {key: value for key, value in row.items() if key != "request_id"}
         for row in scheduler_rows
     ]
-    scheduler_digest = hashlib.sha256(
+    scheduler_full_request_digest = hashlib.sha256(
         json.dumps(
             normalized_scheduler_rows,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    prefill_scheduler_rows, scheduler_prefill_boundary_gate = (
+        _prefill_scheduler_rows(scheduler_rows, prompt_tokens, page_tokens)
+    )
+    normalized_prefill_scheduler_rows = [
+        {key: value for key, value in row.items() if key != "request_id"}
+        for row in prefill_scheduler_rows
+    ]
+    scheduler_digest = hashlib.sha256(
+        json.dumps(
+            normalized_prefill_scheduler_rows,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -309,8 +358,11 @@ def summarize(
         )
     )
     paired_policy_gate = bool(
-        expected_scheduler_digest is None
-        or scheduler_digest == expected_scheduler_digest
+        scheduler_prefill_boundary_gate
+        and (
+            expected_scheduler_digest is None
+            or scheduler_digest == expected_scheduler_digest
+        )
     )
     semantic_gate = bool(
         response.get("target_codes_in_order")
@@ -359,6 +411,7 @@ def summarize(
         "trace_gate": trace_gate,
         "paired_trace_exact": paired_trace_exact,
         "paired_policy_gate": paired_policy_gate,
+        "scheduler_prefill_boundary_gate": scheduler_prefill_boundary_gate,
         "trace_enabled": trace_summary is not None,
         "records": len(prefill),
         "all_worker_events": len(events),
@@ -469,6 +522,8 @@ def summarize(
         "trace_expected_missing_pages": expected_trace_missing_pages,
         "trace_summary": trace_summary,
         "scheduler_policy_digest": scheduler_digest,
+        "scheduler_full_request_digest": scheduler_full_request_digest,
+        "scheduler_prefill_policy_rows": len(prefill_scheduler_rows),
         "expected_trace_sha256": expected_trace_sha256,
         "expected_scheduler_policy_digest": expected_scheduler_digest,
     }
