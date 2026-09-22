@@ -54,6 +54,8 @@ def _reset_stats() -> None:
         "commit_calls",
         "commit_bytes",
         "committed_layers",
+        "strided_commit_calls",
+        "index_commit_calls",
     ):
         stats[key] = 0
     for key in (
@@ -158,6 +160,8 @@ def test_metadata_bulk_ab_preserves_exact_final_layout(monkeypatch: pytest.Monke
     assert stats["commit_calls"] == 9
     assert stats["commit_bytes"] == stats["deferred_bytes"]
     assert stats["committed_layers"] == 1
+    assert stats["strided_commit_calls"] == 9
+    assert stats["index_commit_calls"] == 0
     assert layer._exl3_metadata_bulk_ab_stage == {}
 
 
