@@ -16,6 +16,24 @@ from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many, _touch
 
 _LAYER_INDEX_RE = re.compile(r"\.layers\.(\d+)\.")
 _TRACE_RESET_PATHS: set[Path] = set()
+_TRANSFER_TIMING_FIELDS = (
+    "event_seconds",
+    "wall_seconds",
+    "prepare_seconds",
+    "submit_seconds",
+    "wait_seconds",
+    "finish_seconds",
+)
+_CUMULATIVE_TIMING_FIELDS = tuple(
+    f"{direction}_{field}_total"
+    for direction in ("d2h", "h2d")
+    for field in _TRANSFER_TIMING_FIELDS
+) + (
+    "d2d_copy_submit_seconds_total",
+    "direct_consumer_sync_seconds_total",
+    "publication_oracle_gather_submit_seconds_total",
+    "trace_wall_seconds_total",
+)
 
 
 def _write_event(payload: dict[str, Any]) -> None:
@@ -38,14 +56,7 @@ def _layer_id(layer_name: str) -> int:
 def _accumulate_transfer(
     state: dict[str, Any], direction: str, observation: Any
 ) -> None:
-    for field in (
-        "event_seconds",
-        "wall_seconds",
-        "prepare_seconds",
-        "submit_seconds",
-        "wait_seconds",
-        "finish_seconds",
-    ):
+    for field in _TRANSFER_TIMING_FIELDS:
         key = f"{direction}_{field}_total"
         state[key] = float(state[key]) + float(getattr(observation, field))
 
@@ -128,18 +139,7 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         lineage=f"q2d-runtime:{layer.layer_name}",
     )
     read_pages = int(plan["read_cache_page_count"])
-    timing_totals = {
-        f"{direction}_{field}_total": 0.0
-        for direction in ("d2h", "h2d")
-        for field in (
-            "event_seconds",
-            "wall_seconds",
-            "prepare_seconds",
-            "submit_seconds",
-            "wait_seconds",
-            "finish_seconds",
-        )
-    }
+    timing_totals = {field: 0.0 for field in _CUMULATIVE_TIMING_FIELDS}
     state = {
         "backing": backing,
         "direct_io": direct_io,
@@ -160,14 +160,10 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "roundtrip_pages": 0,
         "roundtrip_exact": True,
         "direct_load_verified_pages": 0,
-        "direct_consumer_sync_seconds": 0.0,
         "direct_consumer_syncs": 0,
         "trace_records": 0,
         "trace_bytes": 0,
         "trace_truncated": False,
-        "trace_wall_seconds_total": 0.0,
-        "d2d_copy_submit_seconds_total": 0.0,
-        "publication_oracle_gather_submit_seconds_total": 0.0,
         **timing_totals,
     }
     layer._q2d_streaming_state = state
@@ -318,7 +314,7 @@ def _publish_completed(
         state["h2d_jobs"] += int(restore.job_id != 0)
         _accumulate_transfer(state, "h2d", restore)
         state["direct_load_verified_pages"] += int(restore.verified_pages)
-        state["direct_consumer_sync_seconds"] += float(
+        state["direct_consumer_sync_seconds_total"] += float(
             restore.consumer_sync_seconds
         )
         state["direct_consumer_syncs"] += int(restore.consumer_syncs)
@@ -396,7 +392,9 @@ def _stage_history(
         state["h2d_jobs"] += int(obs.job_id != 0)
         _accumulate_transfer(state, "h2d", obs)
         state["direct_load_verified_pages"] += int(obs.verified_pages)
-        state["direct_consumer_sync_seconds"] += float(obs.consumer_sync_seconds)
+        state["direct_consumer_sync_seconds_total"] += float(
+            obs.consumer_sync_seconds
+        )
         state["direct_consumer_syncs"] += int(obs.consumer_syncs)
     else:
         for start in range(0, len(missing), chunk_size):
@@ -408,7 +406,7 @@ def _stage_history(
             state["h2d_jobs"] += int(obs.job_id != 0)
             _accumulate_transfer(state, "h2d", obs)
             state["direct_load_verified_pages"] += int(obs.verified_pages)
-            state["direct_consumer_sync_seconds"] += float(
+            state["direct_consumer_sync_seconds_total"] += float(
                 obs.consumer_sync_seconds
             )
             state["direct_consumer_syncs"] += int(obs.consumer_syncs)
@@ -457,26 +455,7 @@ def run_streaming_runtime(
         _reset_trace_after_warmup_once()
         state = _new_state(layer, plan)
     state["saw_forward"] = True
-    cumulative_timing_fields = tuple(
-        [
-            f"{direction}_{field}_total"
-            for direction in ("d2h", "h2d")
-            for field in (
-                "event_seconds",
-                "wall_seconds",
-                "prepare_seconds",
-                "submit_seconds",
-                "wait_seconds",
-                "finish_seconds",
-            )
-        ]
-        + [
-            "d2d_copy_submit_seconds_total",
-            "direct_consumer_sync_seconds_total",
-            "publication_oracle_gather_submit_seconds_total",
-            "trace_wall_seconds_total",
-        ]
-    )
+    cumulative_timing_fields = _CUMULATIVE_TIMING_FIELDS
     timing_before = {
         field: float(state[field]) for field in cumulative_timing_fields
     }
@@ -644,7 +623,7 @@ def run_streaming_runtime(
             state["direct_load_verified_pages"]
         ),
         "direct_consumer_sync_seconds_total": float(
-            state["direct_consumer_sync_seconds"]
+            state["direct_consumer_sync_seconds_total"]
         ),
         "direct_consumer_syncs_total": int(state["direct_consumer_syncs"]),
         "d2h_bytes_total": int(state["d2h_bytes"]),
