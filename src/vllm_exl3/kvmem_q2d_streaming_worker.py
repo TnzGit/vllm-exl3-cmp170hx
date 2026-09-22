@@ -9,6 +9,7 @@ import re
 import time
 from typing import Any, Sequence
 
+import numpy as np
 import torch
 
 from vllm_exl3.kvmem_q2d_reload_shadow import _assign_many, _touch
@@ -171,6 +172,9 @@ def _new_state(layer: Any, plan: dict[str, Any]) -> dict[str, Any]:
         "dynamic_table_oracle_checks": 0,
         "dynamic_table_oracle_pages": 0,
         "last_use": {},
+        "last_use_array": np.full(
+            int(plan["cpu_page_count"]), -1, dtype=np.int64
+        ),
         "clock": 0,
         "peak_slots": 0,
         "published": set(),

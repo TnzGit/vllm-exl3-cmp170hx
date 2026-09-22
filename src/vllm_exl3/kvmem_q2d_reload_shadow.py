@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
 import torch
 
 from vllm_exl3.kvmem_q2d_plan import load_reload_plan, validate_reload_plan
@@ -167,7 +168,18 @@ def _assign_many(
             int(logical) for logical in state["logical_to_slot"]
             if int(logical) not in protected
         ]
-        if need_victims < len(candidates):
+        last_use_array = state.get("last_use_array")
+        if last_use_array is not None:
+            candidate_pages = np.asarray(candidates, dtype=np.int64)
+            candidate_times = last_use_array[candidate_pages]
+            if bool(np.any(candidate_times < 0)):
+                raise RuntimeError("Q2D resident page has no LRU timestamp")
+            # The second key preserves Python dict insertion order for the
+            # defensive equal-timestamp case, matching stable sorted().
+            insertion_order = np.arange(len(candidates), dtype=np.int64)
+            order = np.lexsort((insertion_order, candidate_times))
+            victims = candidate_pages[order[:need_victims]].tolist()
+        elif need_victims < len(candidates):
             victims = heapq.nsmallest(
                 need_victims,
                 candidates,
@@ -186,6 +198,8 @@ def _assign_many(
     for victim in victims:
         slot = int(state["logical_to_slot"].pop(victim))
         state["last_use"].pop(victim, None)
+        if state.get("last_use_array") is not None:
+            state["last_use_array"][victim] = -1
         state["slot_to_logical"][slot] = None
         available.append(slot)
     for page, slot in zip(missing, available[:len(missing)], strict=True):
@@ -202,9 +216,15 @@ def _touch(state: dict[str, Any], pages: Sequence[int]) -> None:
     if not count:
         return
     first = int(state["clock"]) + 1
-    state["last_use"].update(
-        zip((int(page) for page in pages), range(first, first + count), strict=True)
-    )
+    if state.get("last_use_array") is not None:
+        indices = np.fromiter((int(page) for page in pages), dtype=np.int64, count=count)
+        state["last_use_array"][indices] = np.arange(
+            first, first + count, dtype=np.int64
+        )
+    else:
+        state["last_use"].update(
+            zip((int(page) for page in pages), range(first, first + count), strict=True)
+        )
     state["clock"] = first + count - 1
 
 

@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from vllm_exl3.kvmem_q2d_reload_shadow import (
@@ -87,6 +88,24 @@ def test_bulk_touch_preserves_exact_sequential_clock_values():
     _touch(state, [12, 10])
     assert state["clock"] == 5
     assert state["last_use"] == {10: 5, 11: 2, 12: 4}
+
+
+def test_array_lru_matches_stable_dict_ties_and_touch_order():
+    state = _lru_state(3)
+    state["last_use_array"] = np.full(32, -1, dtype=np.int64)
+    _assign_many(state, [10, 11, 12], set())
+    _touch(state, [10, 11, 12])
+    _touch(state, [12, 10])
+    assert state["clock"] == 5
+    assert state["last_use_array"][[10, 11, 12]].tolist() == [5, 2, 4]
+    assert _assign_many(state, [13], {10, 12, 13}) == [1]
+    assert int(state["last_use_array"][11]) == -1
+
+    tied = _lru_state(2)
+    tied["last_use_array"] = np.full(32, -1, dtype=np.int64)
+    _assign_many(tied, [20, 21], set())
+    tied["last_use_array"][[20, 21]] = 7
+    assert _assign_many(tied, [22], {22}) == [0]
 
 
 def test_lru_refuses_when_entire_pool_is_protected():
