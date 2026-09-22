@@ -309,6 +309,27 @@ def test_streaming_summary_can_require_dynamic_table_oracle():
     assert result["dynamic_table_oracle_check_mismatches"] == 1
 
 
+def test_streaming_summary_can_require_repeated_direct_load_verification():
+    rows = _rows()
+    for row in rows:
+        if row.get("event") == "q2d_streaming_runtime":
+            row["direct_load_verified_pages_total"] = 66
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(),
+        min_direct_load_verified_pages_per_layer=66,
+    )
+    assert result["direct_load_verification_gate"] is True
+    assert result["streaming_qualification_go"] is True
+
+    rows[-1]["direct_load_verified_pages_total"] = 65
+    result = _load().summarize(
+        _response(), rows, _scheduler(), _plan(),
+        min_direct_load_verified_pages_per_layer=66,
+    )
+    assert result["direct_load_verification_gate"] is False
+    assert result["classification"] == "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
+
+
 def test_streaming_summary_gates_expected_direct_io_mode():
     rows = _rows()
     for row in rows:

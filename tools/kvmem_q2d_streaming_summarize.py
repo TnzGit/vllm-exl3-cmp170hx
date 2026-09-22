@@ -61,9 +61,12 @@ def summarize(
     expected_trace_sha256: str | None = None,
     expected_scheduler_digest: str | None = None,
     require_dynamic_table_oracle: bool = False,
+    min_direct_load_verified_pages_per_layer: int = 0,
 ) -> dict[str, Any]:
     if expected_io_mode not in ("staged_copy", "direct_dedicated_slots"):
         raise ValueError(f"unsupported expected_io_mode: {expected_io_mode}")
+    if min_direct_load_verified_pages_per_layer < 0:
+        raise ValueError("minimum direct-load verification must be nonnegative")
     prompt_tokens = int(plan["query_span"][1])
     chunk_tokens = int(plan["scheduler_chunk_tokens"])
     expected_layers = int(plan["expected_qsa_layers"])
@@ -217,6 +220,14 @@ def summarize(
         )
         for layer in layers
     }
+    direct_load_verification_gate = bool(
+        len(final_by_layer) == expected_layers
+        and all(
+            int(row.get("direct_load_verified_pages_total", 0))
+            >= min_direct_load_verified_pages_per_layer
+            for row in final_by_layer.values()
+        )
+    )
     publication_gate = bool(
         len(final_by_layer) == expected_layers
         and all(
@@ -404,6 +415,7 @@ def summarize(
         and capacity_gate and mapping_gate
         and cpu_gate and publication_gate and scheduler_gate and memory_gate
         and trace_gate and paired_policy_gate and dynamic_table_oracle_gate
+        and direct_load_verification_gate
     )
     go = bool(evidence_gate and semantic_gate)
     if go:
@@ -412,6 +424,7 @@ def summarize(
         not coverage_gate or not fields_gate or not timing_gate or not io_mode_gate
         or not memory_gate or not trace_gate or not paired_policy_gate
         or not dynamic_table_oracle_gate
+        or not direct_load_verification_gate
     ):
         classification = "Q2D_STREAMING_EVIDENCE_INCOMPLETE"
     elif not scheduler_gate or not capacity_gate:
@@ -439,6 +452,10 @@ def summarize(
         "publication_gate": publication_gate,
         "dynamic_table_oracle_gate": dynamic_table_oracle_gate,
         "dynamic_table_oracle_required": require_dynamic_table_oracle,
+        "direct_load_verification_gate": direct_load_verification_gate,
+        "min_required_direct_load_verified_pages_per_layer": (
+            min_direct_load_verified_pages_per_layer
+        ),
         "scheduler_gate": scheduler_gate,
         "memory_census_gate": memory_gate,
         "trace_gate": trace_gate,
@@ -604,6 +621,9 @@ def main() -> int:
     ap.add_argument("--expected-trace-sha256")
     ap.add_argument("--expected-scheduler-digest")
     ap.add_argument("--require-dynamic-table-oracle", action="store_true")
+    ap.add_argument(
+        "--min-direct-load-verified-pages-per-layer", type=int, default=0
+    )
     args = ap.parse_args()
     result = summarize(
         json.loads(args.response.read_text()),
@@ -615,6 +635,7 @@ def main() -> int:
         args.expected_trace_sha256,
         args.expected_scheduler_digest,
         args.require_dynamic_table_oracle,
+        args.min_direct_load_verified_pages_per_layer,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))

@@ -22,6 +22,7 @@ Q2E_EXPECTED_PLAN_SHA256="${K1Q2E_EXPECTED_PLAN_SHA256:-}"
 Q2E_EXPECTED_TRACE_SHA256="${K1Q2E_EXPECTED_TRACE_SHA256:-}"
 Q2E_EXPECTED_SCHEDULER_DIGEST="${K1Q2E_EXPECTED_SCHEDULER_DIGEST:-}"
 Q2E_VERIFY_MAX_LOGICAL_PAGE="${K1Q2E_VERIFY_MAX_LOGICAL_PAGE:--1}"
+Q2E_MIN_DIRECT_LOAD_VERIFIED="${K1Q2E_MIN_DIRECT_LOAD_VERIFIED_PAGES_PER_LAYER:-0}"
 Q2E_DIRECT_CONSUMER_SYNC="${K1Q2E_DIRECT_CONSUMER_SYNC:-1}"
 Q2E_VERIFY_DYNAMIC_TABLE="${K1Q2E_VERIFY_DYNAMIC_TABLE:-0}"
 if [[ "$GPU_MEM_UTIL" != "0.92" || "$MAXLEN" != "161000" || "$MAX_BATCHED" != "1024" ]]; then
@@ -56,6 +57,14 @@ if [[ "$Q2E_DIRECT_IO" == "1" ]]; then
   done
   if [[ ! "$Q2E_VERIFY_MAX_LOGICAL_PAGE" =~ ^(-1|[0-9]+)$ ]]; then
     echo "REFUSE: direct I/O byte-oracle limit must be -1 or nonnegative" >&2
+    exit 2
+  fi
+  if [[ ! "$Q2E_MIN_DIRECT_LOAD_VERIFIED" =~ ^[0-9]+$ ]]; then
+    echo "REFUSE: K1Q2E_MIN_DIRECT_LOAD_VERIFIED_PAGES_PER_LAYER must be nonnegative" >&2
+    exit 2
+  fi
+  if (( Q2E_MIN_DIRECT_LOAD_VERIFIED > 0 )) && [[ "$Q2E_VERIFY_MAX_LOGICAL_PAGE" == "-1" ]]; then
+    echo "REFUSE: direct-load verification gate requires a nonnegative page limit" >&2
     exit 2
   fi
   if [[ "$Q2E_DIRECT_CONSUMER_SYNC" != "1" ]]; then
@@ -354,6 +363,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "${IO_ARGS[@]}" \
   "${POLICY_ARGS[@]}" \
   "${ORACLE_ARGS[@]}" \
+  --min-direct-load-verified-pages-per-layer "$Q2E_MIN_DIRECT_LOAD_VERIFIED" \
   | tee "$OUT/q2d_streaming_summary.stdout.json"
 SUMMARY_RC=$?
 set -e
