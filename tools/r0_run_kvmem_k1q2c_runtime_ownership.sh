@@ -59,6 +59,7 @@ TURN_FILE="$K1A_DIR/turns/ctx160000/turn_04_ask_d_e.json"
 K1B_SUMMARY="$K1B_DIR/k1b_sticky_summary.json"
 Q2B_PLAN="$OUT/q2b_source_plan.json"
 PLAN="$OUT/q2c_runtime_plan.json"
+BOOT_SIZING="$OUT/q2c_boot_sizing_contract.json"
 SCHED_STATS="$OUT/q2c_scheduler_stats.jsonl"
 WORKER_STATS="$OUT/q2c_worker_stats.jsonl"
 RESPONSE="$OUT/q2c_response.json"
@@ -169,6 +170,7 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2c_runtime_ownership.sh"
   "$REPO/src/vllm_exl3/kvmem_qsa_scheduler_runtime.py" \
   "$REPO/src/vllm_exl3/kvmem_vllm_offload.py" \
   "$REPO/tools/kvmem_qsa_make_q2c_runtime_plan.py" \
+  "$REPO/tools/kvmem_q2c_boot_sizing_contract.py" \
   "$REPO/tools/kvmem_q2c_runtime_summarize.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_runtime.py"
 
@@ -200,6 +202,12 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$V/bin/python" "$REPO/tools/kvmem_qsa_make_q2c_runtime_plan.py" \
   --q2b-plan "$Q2B_PLAN" --out "$PLAN" \
   | tee "$OUT/q2c_runtime_plan.stdout.json"
+
+echo "=== validate Q2C boot sizing contract ==="
+PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+  "$V/bin/python" "$REPO/tools/kvmem_q2c_boot_sizing_contract.py" \
+  --plan "$PLAN" --out "$BOOT_SIZING" \
+  | tee "$OUT/q2c_boot_sizing_contract.stdout.json"
 
 echo "=== apply Q2C QSA patch ==="
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
