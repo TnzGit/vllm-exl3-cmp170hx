@@ -90,18 +90,42 @@ def apply_progressive_visibility(
             raise RuntimeError("Q2C workset row-batch sizes must be positive")
         for size in row_batch_sizes:
             maximum = 0
+            maximum_selected = 0
+            cold_h2d_pages = 0
+            subbatches = 0
             for start in range(0, selected.shape[0], size):
                 end = min(start + size, selected.shape[0])
                 batch_valid = valid[start:end]
                 batch_pages = pages[start:end][batch_valid]
-                batch_current = current_pages[start:end]
+                batch_history = pages[start:end][
+                    batch_valid & processed_history[start:end]
+                ]
+                selected_count = _unique_count(batch_pages)
+                # KV for the complete scheduler chunk is written before QSA
+                # attention runs. A row-split implementation must therefore
+                # keep every current write page live while each sub-batch is
+                # evaluated, not only the pages containing that sub-batch.
                 maximum = max(
                     maximum,
-                    _unique_count(torch.cat((batch_pages, batch_current))),
+                    _unique_count(torch.cat((batch_pages, current_pages))),
                 )
+                maximum_selected = max(maximum_selected, selected_count)
+                # A valid cold/no-reuse H2D upper bound: load every unique
+                # processed historical page afresh for every sub-batch.
+                cold_h2d_pages += _unique_count(batch_history)
+                subbatches += 1
             row_batch_working_sets[
                 f"row_batch_{size}_max_working_pages"
             ] = maximum
+            row_batch_working_sets[
+                f"row_batch_{size}_max_selected_pages"
+            ] = maximum_selected
+            row_batch_working_sets[
+                f"row_batch_{size}_cold_h2d_pages_no_reuse"
+            ] = cold_h2d_pages
+            row_batch_working_sets[
+                f"row_batch_{size}_subbatches"
+            ] = subbatches
     if apply_mask:
         selected.masked_fill_(would_drop, -1)
 
@@ -138,6 +162,8 @@ def apply_progressive_visibility(
             unique_nonresident_historical_pages_before
         ),
         "unique_pages_with_current_writes_before": unique_with_writes_before,
+        "current_chunk_write_pages": _unique_count(current_pages),
+        "working_set_schema": 2,
         "unique_pages_after": unique_pages_after,
         "unique_pages_with_current_writes_after": unique_with_writes_after,
         "post_valid": int(post_valid.sum().item()),

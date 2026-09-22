@@ -4,6 +4,8 @@
 The patch does not change KV ownership or addressing. In ``baseline`` mode it
 only records the indexer selection. In ``progressive_mask`` mode it applies the
 same shared visibility function as bounded Q2C before stock full-KV attention.
+In ``split_reference`` mode it compares full and row-split QSA attention in the
+same forward call with identical inputs.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ def _q2c_attrib_config():
     mode = os.environ.get("VLLM_QWEN_KVMEM_Q2C_ATTRIB_MODE")
     if not mode:
         return None, None
-    if mode not in {"baseline", "progressive_mask"}:
+    if mode not in {"baseline", "progressive_mask", "split_reference"}:
         raise RuntimeError(f"invalid Q2C attribution mode: {mode}")
     path = os.environ.get("VLLM_QWEN_KVMEM_Q2C_PLAN")
     if not path:
@@ -67,6 +69,74 @@ def _q2c_attrib_selection(layer, mode, plan, selected, positions):
         resident_pages_tensor=resident,
     )
     return observation
+
+
+def _q2c_split_reference(
+    layer, impl, query, key, value, kv_cache, metadata, output, token_to_req
+):
+    rows = int(os.environ.get("VLLM_QWEN_KVMEM_Q2C_SPLIT_ROWS", "0"))
+    if rows <= 0:
+        raise RuntimeError("Q2C split-reference mode requires positive split rows")
+    num_tokens = int(metadata.num_actual_tokens)
+
+    # Full and split calls share the exact same already-written K/V, selected
+    # indices, block table, Q, and request mapping in one forward invocation.
+    impl.forward_qsa(
+        layer,
+        query,
+        key,
+        value,
+        kv_cache,
+        metadata,
+        output,
+        token_to_req=token_to_req,
+    )
+    reference = output[:num_tokens].clone()
+    output.zero_()
+    if num_tokens == 0:
+        return {
+            "split_rows": rows,
+            "split_calls": 0,
+            "split_exact": True,
+            "split_elements": 0,
+            "split_mismatch_elements": 0,
+            "split_max_abs": 0.0,
+        }
+
+    logical_indices = layer.topk_indices_buffer[:num_tokens]
+    request_ids = token_to_req[:num_tokens]
+    key_cache, value_cache = kv_cache.transpose(1, 2).split(
+        impl.head_size, dim=-1
+    )
+    key_cache = canonicalize_singleton_dim_strides(key_cache)
+    value_cache = canonicalize_singleton_dim_strides(value_cache)
+    from .ops.qsa import qsa_sparse_paged_attention
+
+    calls = 0
+    for start in range(0, num_tokens, rows):
+        end = min(start + rows, num_tokens)
+        qsa_sparse_paged_attention(
+            query[start:end],
+            key_cache,
+            value_cache,
+            logical_indices[start:end],
+            metadata.block_table,
+            request_ids[start:end],
+            output[start:end],
+        )
+        calls += 1
+    actual = output[:num_tokens]
+    exact = bool(torch.equal(reference, actual))
+    mismatch = int(torch.ne(reference, actual).sum().item())
+    max_abs = float((reference.float() - actual.float()).abs().max().item())
+    return {
+        "split_rows": rows,
+        "split_calls": calls,
+        "split_exact": exact,
+        "split_elements": int(reference.numel()),
+        "split_mismatch_elements": mismatch,
+        "split_max_abs": max_abs,
+    }
 
 '''
 
@@ -108,16 +178,30 @@ RUN_BLOCK = """        impl = cast(Qwen4ExpQSAFlashAttentionImpl, self.impl)
             self.kv_cache,
             main_metadata.slot_mapping,
         )
-        impl.forward_qsa(
-            self,
-            query,
-            key,
-            value,
-            self.kv_cache,
-            main_metadata,
-            output,
-            token_to_req=side_metadata.token_to_req,
-        )
+        _q2c_split_observation = None
+        if _q2c_attrib_mode == "split_reference":
+            _q2c_split_observation = _q2c_split_reference(
+                self,
+                impl,
+                query,
+                key,
+                value,
+                self.kv_cache,
+                main_metadata,
+                output,
+                side_metadata.token_to_req,
+            )
+        else:
+            impl.forward_qsa(
+                self,
+                query,
+                key,
+                value,
+                self.kv_cache,
+                main_metadata,
+                output,
+                token_to_req=side_metadata.token_to_req,
+            )
         if _q2c_attrib_observation is not None:
             from vllm_exl3.kvmem_q2c_attribution import (
                 tensor_bit_fingerprint,
@@ -128,12 +212,24 @@ RUN_BLOCK = """        impl = cast(Qwen4ExpQSAFlashAttentionImpl, self.impl)
                 "mode": (
                     "a_full_original"
                     if _q2c_attrib_mode == "baseline"
-                    else "b_full_masked"
+                    else (
+                        "b_full_masked"
+                        if _q2c_attrib_mode == "progressive_mask"
+                        else "d_full_split"
+                    )
                 ),
                 "layer": self.layer_name,
                 **_q2c_attrib_observation,
+                **(_q2c_split_observation or {}),
                 **tensor_bit_fingerprint(output),
             })
+            if (
+                _q2c_split_observation is not None
+                and not _q2c_split_observation["split_exact"]
+            ):
+                raise RuntimeError(
+                    "Q2C full-KV row-split attention differs from same-forward reference"
+                )
 """
 
 
@@ -157,6 +253,10 @@ def patch(path: Path, *, check_only: bool = False) -> str:
         "VLLM_QWEN_KVMEM_Q2C_ATTRIB_MODE",
         "apply_progressive_visibility",
         'mode == "progressive_mask"',
+        '"split_reference"',
+        "_q2c_split_reference",
+        '"d_full_split"',
+        '"split_exact"',
         '"a_full_original"',
         '"b_full_masked"',
         "tensor_bit_fingerprint",

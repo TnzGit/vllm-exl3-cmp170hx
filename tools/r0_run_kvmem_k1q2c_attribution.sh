@@ -16,6 +16,8 @@ MAXLEN="${MAX_MODEL_LEN:-161000}"
 MAXTOK="${K1Q2C_MAX_TOKENS:-512}"
 MAX_BATCHED="${K1Q2C_MAX_NUM_BATCHED_TOKENS:-1024}"
 A_ONLY="${K1Q2C_ATTRIB_A_ONLY:-0}"
+SPLIT_ONLY="${K1Q2C_ATTRIB_SPLIT_ONLY:-0}"
+SPLIT_ROWS="${K1Q2C_SPLIT_ROWS:-64}"
 WORKSET_ROW_BATCHES="${K1Q2C_WORKSET_ROW_BATCHES:-}"
 if [[ "$MAX_BATCHED" != "1024" ]]; then
   echo "REFUSE: Q2C attribution requires max-num-batched-tokens=1024" >&2
@@ -23,6 +25,18 @@ if [[ "$MAX_BATCHED" != "1024" ]]; then
 fi
 if [[ "$A_ONLY" != "0" && "$A_ONLY" != "1" ]]; then
   echo "REFUSE: K1Q2C_ATTRIB_A_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$SPLIT_ONLY" != "0" && "$SPLIT_ONLY" != "1" ]]; then
+  echo "REFUSE: K1Q2C_ATTRIB_SPLIT_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "$A_ONLY" == "1" && "$SPLIT_ONLY" == "1" ]]; then
+  echo "REFUSE: A-only workset and split-only modes are mutually exclusive" >&2
+  exit 2
+fi
+if (( SPLIT_ROWS <= 0 )); then
+  echo "REFUSE: K1Q2C_SPLIT_ROWS must be positive" >&2
   exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -74,6 +88,9 @@ C_STATS="$OUT/c_bounded_stats.jsonl"
 A_RESPONSE="$OUT/a_full_original_response.json"
 B_RESPONSE="$OUT/b_full_masked_response.json"
 C_RESPONSE="$OUT/c_bounded_response.json"
+D_STATS="$OUT/d_full_split_stats.jsonl"
+D_RESPONSE="$OUT/d_full_split_response.json"
+D_SUMMARY="$OUT/q2c_split_summary.json"
 SCHED_STATS="$OUT/c_scheduler_stats.jsonl"
 WORKER_STATS="$OUT/c_worker_stats.jsonl"
 C_SUMMARY="$OUT/c_q2c_runtime_summary.json"
@@ -153,6 +170,7 @@ launch_full_control() {
   VLLM_QWEN_KVMEM_Q2C_ATTRIB_MODE="$mode" \
   VLLM_QWEN_KVMEM_Q2C_ATTRIB_STATS_PATH="$stats" \
   VLLM_QWEN_KVMEM_Q2C_WORKSET_ROW_BATCHES="$WORKSET_ROW_BATCHES" \
+  VLLM_QWEN_KVMEM_Q2C_SPLIT_ROWS="$SPLIT_ROWS" \
   VLLM_KV_CACHE_LAYOUT=BLHNC \
   ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 \
   MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" \
@@ -179,9 +197,15 @@ launch_bounded() {
 }
 
 run_request() {
-  local out="$1" stdout="$2"
+  local out="$1" stdout="$2" stats="$3"
+  local scheduler_stats="${4:-}" worker_stats="${5:-}"
   wait_healthy
   guard_idle
+  # Engine startup executes small QSA warmups. Start request evidence only
+  # after health/idle so coverage checks describe the real 160K request.
+  : > "$stats"
+  if [[ -n "$scheduler_stats" ]]; then : > "$scheduler_stats"; fi
+  if [[ -n "$worker_stats" ]]; then : > "$worker_stats"; fi
   "$V/bin/python" "$REPO/tools/kvmem_qsa_visibility_probe.py" \
     --port "$PORT" --case "$TURN_FILE" --max-tokens "$MAXTOK" \
     --out "$out" | tee "$stdout"
@@ -234,6 +258,7 @@ bash -n "$REPO/tools/r0_run_kvmem_k1q2c_attribution.sh"
   "$REPO/tools/kvmem_q2c_boot_sizing_contract.py" \
   "$REPO/tools/kvmem_q2c_attribution_summarize.py" \
   "$REPO/tools/kvmem_q2c_working_set_summarize.py" \
+  "$REPO/tools/kvmem_q2c_split_summarize.py" \
   "$REPO/tools/kvmem_q2c_runtime_summarize.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_attribution.py" \
   "$REPO/tools/patch_vllm_qwen4_exp/patch_vllm_qsa_q2c_runtime.py"
@@ -250,6 +275,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$REPO/tests/test_kvmem_q2c_attribution.py" \
   "$REPO/tests/test_kvmem_q2c_attribution_summary.py" \
   "$REPO/tests/test_kvmem_q2c_working_set_summary.py" \
+  "$REPO/tests/test_kvmem_q2c_split_summary.py" \
   "$REPO/tests/test_qsa_q2c_attribution_patch.py" \
   "$REPO/tests/test_kvmem_q2c_scheduler_contract.py" \
   "$REPO/tests/test_kvmem_q2c_boot_sizing.py" \
@@ -286,10 +312,40 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
 PATCHED=1
 grep -Fq "# KVMEM_QSA_Q2C_ATTRIBUTION_V1" "$QSA"
 
+if [[ "$SPLIT_ONLY" == "1" ]]; then
+  : > "$D_STATS"
+  echo "=== D: full KV, same-forward query-row split reference ==="
+  launch_full_control split_reference "$D_STATS" "$OUT/logs/serve_d_full_split.log"
+  run_request "$D_RESPONSE" "$OUT/d_full_split_response.stdout.json" "$D_STATS"
+  test -s "$D_STATS"
+  echo "=== summarize same-forward row split ==="
+  set +e
+  PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
+    "$V/bin/python" "$REPO/tools/kvmem_q2c_split_summarize.py" \
+    --response "$D_RESPONSE" --stats "$D_STATS" --plan "$PLAN" \
+    --split-rows "$SPLIT_ROWS" --out "$D_SUMMARY" \
+    | tee "$OUT/q2c_split_summary.stdout.json"
+  SPLIT_RC=$?
+  set -e
+  XID1=$(xid_now); XID1=${XID1:-0}
+  XID_DELTA=$((XID1-XID0))
+  echo "xid_after=$XID1 xid_delta=$XID_DELTA"
+  restore_qsa
+  QSA_SHA_AFTER=$(sha256sum "$QSA" | awk '{print $1}')
+  echo "qsa_sha256_after=$QSA_SHA_AFTER"
+  if [[ "$QSA_SHA_AFTER" != "$QSA_SHA_BEFORE" ]]; then exit 3; fi
+  nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu \
+    --format=csv,noheader || true
+  echo "gpu_processes=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+' || true)"
+  echo "vllm_processes=$(pgrep -af 'VLLM::EngineCore|vllm serve' | wc -l)"
+  if (( XID_DELTA != 0 )); then exit 3; fi
+  exit "$SPLIT_RC"
+fi
+
 : > "$A_STATS"
 echo "=== A: full KV, original QSA selection ==="
 launch_full_control baseline "$A_STATS" "$OUT/logs/serve_a_full_original.log"
-run_request "$A_RESPONSE" "$OUT/a_full_original_response.stdout.json"
+run_request "$A_RESPONSE" "$OUT/a_full_original_response.stdout.json" "$A_STATS"
 test -s "$A_STATS"
 
 if [[ "$A_ONLY" == "1" ]]; then
@@ -319,7 +375,7 @@ fi
 : > "$B_STATS"
 echo "=== B: full KV, shared progressive mask ==="
 launch_full_control progressive_mask "$B_STATS" "$OUT/logs/serve_b_full_masked.log"
-run_request "$B_RESPONSE" "$OUT/b_full_masked_response.stdout.json"
+run_request "$B_RESPONSE" "$OUT/b_full_masked_response.stdout.json" "$B_STATS"
 test -s "$B_STATS"
 
 restore_qsa
@@ -338,7 +394,8 @@ grep -Fq "# KVMEM_QSA_Q2C_RUNTIME_V1" "$QSA"
 
 echo "=== C: bounded Q2C, shared progressive mask ==="
 launch_bounded
-run_request "$C_RESPONSE" "$OUT/c_bounded_response.stdout.json"
+run_request "$C_RESPONSE" "$OUT/c_bounded_response.stdout.json" \
+  "$C_STATS" "$SCHED_STATS" "$WORKER_STATS"
 test -s "$C_STATS"
 test -s "$SCHED_STATS"
 test -s "$WORKER_STATS"

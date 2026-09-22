@@ -51,6 +51,10 @@ def test_attribution_patch_uses_shared_policy_without_ownership_change():
     assert mod.MARKER in out
     assert "apply_progressive_visibility" in out
     assert 'mode == "progressive_mask"' in out
+    assert '"split_reference"' in out
+    assert "_q2c_split_reference" in out
+    assert "qsa_sparse_paged_attention" in out
+    assert '"split_exact"' in out
     assert "tensor_bit_fingerprint" in out
     assert "make_qsa_runtime_spec" not in out
     assert "_q2c_dedicated_kv_cache" not in out

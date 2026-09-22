@@ -81,9 +81,16 @@ def test_output_bit_fingerprint_is_exact_and_sensitive():
 def test_optional_query_row_batch_working_sets(monkeypatch):
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2C_WORKSET_ROW_BATCHES", "2,1")
     selected = torch.tensor([[0, 16], [32, 48], [64, 80], [96, 112]])
-    positions = torch.tensor([128, 129, 130, 131])
+    positions = torch.tensor([128, 144, 160, 176])
     out = apply_progressive_visibility(
         _plan(), selected, positions, apply_mask=False
     )
-    assert out["row_batch_2_max_working_pages"] == 5
-    assert out["row_batch_1_max_working_pages"] == 3
+    assert out["current_chunk_write_pages"] == 4
+    assert out["row_batch_2_max_working_pages"] == 8
+    assert out["row_batch_1_max_working_pages"] == 6
+    assert out["row_batch_2_max_selected_pages"] == 4
+    assert out["row_batch_1_max_selected_pages"] == 2
+    assert out["row_batch_2_cold_h2d_pages_no_reuse"] == 8
+    assert out["row_batch_1_cold_h2d_pages_no_reuse"] == 8
+    assert out["row_batch_2_subbatches"] == 2
+    assert out["row_batch_1_subbatches"] == 4
