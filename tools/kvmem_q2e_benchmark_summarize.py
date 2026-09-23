@@ -6,11 +6,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def _layer_id(row: dict[str, Any]) -> int:
+    if "layer_id" in row:
+        return int(row["layer_id"])
+    match = re.search(r"\.layers\.(\d+)\.", str(row.get("layer", "")))
+    if match is None:
+        raise ValueError(f"cannot derive QSA layer from {row.get('layer')!r}")
+    return int(match.group(1))
 
 
 def summarize(run_dir: Path, contexts: list[int]) -> dict[str, Any]:
@@ -22,7 +32,7 @@ def summarize(run_dir: Path, contexts: list[int]) -> dict[str, Any]:
         worker = _jsonl(cell_dir / "worker.jsonl")
         scheduler = _jsonl(cell_dir / "scheduler.jsonl")
         runtime = [row for row in worker if row.get("event") == "q2d_streaming_runtime"]
-        layers = sorted({int(row["layer_id"]) for row in runtime})
+        layers = sorted({_layer_id(row) for row in runtime})
         combined_peak = max(
             (int(row.get("combined_real_pages", 0)) for row in runtime), default=0
         )

@@ -60,3 +60,9 @@ def test_summary_requires_semantics_layers_cpu_exactness_and_capacity(tmp_path):
     result = _load_summarizer().summarize(tmp_path, [16000])
     assert result["status"] == "INVALID"
     assert "physical page cap exceeded" in result["errors"][0]
+
+
+def test_layer_id_can_be_derived_from_live_layer_name():
+    derive = _load_summarizer()._layer_id
+    assert derive({"layer": "model.layers.17.self_attn"}) == 17
+    assert derive({"layer_id": 9}) == 9
