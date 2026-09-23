@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "stock_control": {
+    "sha": "7eb0fa5e7babf74ec4779c29bc8035ca8d76e9fe",
+    "prompt_tokens": 15533,
+    "completion_tokens": 256,
+    "eager_decode_ms_per_token": 96.01346915701914,
+    "graph_decode_ms_per_token": 20.40373795282315,
+    "target_codes_in_order": true
+  },
+  "q2e_graph": [
+    {
+      "sha": "d1310ea33b4f2e14115edb1aae62b5a476a741fd",
+      "context": 16000,
+      "prompt_tokens": 15533,
+      "prefill_tok_s": 1122.8634793866393,
+      "decode_ms_per_token": 37.919510976530105,
+      "read_write_page_peak": 1114,
+      "working_page_peak": 971,
+      "target_codes_in_order": true,
+      "cpu_roundtrip_exact": true
+    },
+    {
+      "sha": "c8b03ce289d04ae9f9b480f415b5510f4896f4df",
+      "context": 80000,
+      "prompt_tokens": 79533,
+      "prefill_tok_s": 1100.8454578404574,
+      "decode_ms_per_token": 44.72176550189033,
+      "read_write_page_peak": 4160,
+      "working_page_peak": 3157,
+      "target_codes_in_order": true,
+      "cpu_roundtrip_exact": true
+    },
+    {
+      "sha": "c8b03ce289d04ae9f9b480f415b5510f4896f4df",
+      "context": 160000,
+      "prompt_tokens": 159533,
+      "prefill_tok_s": 882.5880778818133,
+      "decode_ms_per_token": 54.38013076873533,
+      "read_write_page_peak": 4160,
+      "working_page_peak": 3840,
+      "target_codes_in_order": true,
+      "cpu_roundtrip_exact": true
+    },
+    {
+      "sha": "c8b03ce289d04ae9f9b480f415b5510f4896f4df",
+      "context": 240000,
+      "prompt_tokens": 239533,
+      "prefill_tok_s": 701.9394986590386,
+      "decode_ms_per_token": 54.632059156931206,
+      "read_write_page_peak": 4160,
+      "working_page_peak": 4096,
+      "target_codes_in_order": true,
+      "cpu_roundtrip_exact": true
+    }
+  ],
+  "decode_240k_worker": {
+    "records": 3060,
+    "timed_decode_tokens": 255,
+    "forward_exposed_ms_per_token": 28.351544022934476,
+    "stage_history_ms_per_token": 14.724140835460275,
+    "slot_assignment_ms_per_token": 8.70899511706632,
+    "transfer_call_ms_per_token": 3.3735556295141578,
+    "table_delta_ms_per_token": 1.056688579767212,
+    "reload_miss_pages": 36724
+  },
+  "rejected_partial_lru": {
+    "sha": "3b458f87df5af71a7de8300095d7a2cdadad867c",
+    "context_16000_decode_ms_per_token": 38.119020670488034,
+    "context_240000_decode_ms_per_token": 53.742808478373085,
+    "context_240000_decode_reload_miss_pages": 20604,
+    "trace_sha256": "36c5b462b3be166c4588430b71216d08be43a1ead223d07b4807e1feb58fb2dd",
+    "trace_records": 33120,
+    "trace_assigned_pages": 2097938,
+    "full_sort_assignment_seconds": 11.697242646943778,
+    "partial_assignment_seconds": 11.095194443769287,
+    "all_trace_records_exact": true,
+    "disposition": "reverted: end-to-end gain below attribution threshold"
+  },
+  "graph_probe_hygiene": {
+    "xid_before": 0,
+    "xid_after": 0,
+    "installed_qsa_restored": true,
+    "gpu_memory_after_mib": 14,
+    "gpu_processes_after": 0,
+    "vllm_processes_after": 0
+  }
+}

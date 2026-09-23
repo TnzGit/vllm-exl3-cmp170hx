@@ -108,7 +108,7 @@ def test_array_lru_matches_stable_dict_ties_and_touch_order():
     assert _assign_many(tied, [22], {22}) == [0]
 
 
-def test_partial_victim_selection_matches_stable_full_sort():
+def test_array_lru_victim_selection_matches_stable_full_sort():
     rng = np.random.default_rng(423)
     for capacity in (4, 31, 4032):
         for missing_count in (1, 2, min(23, capacity - 1)):
@@ -133,7 +133,7 @@ def test_partial_victim_selection_matches_stable_full_sort():
             )
 
 
-def test_partial_victim_selection_replays_stable_lru_events():
+def test_array_lru_replays_stable_lru_events():
     def reference_assign(state, pages):
         missing = [page for page in pages if page not in state["logical_to_slot"]]
         free = [
