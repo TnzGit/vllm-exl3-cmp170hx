@@ -34,6 +34,7 @@ LEAD_WORDS = (
 )
 FILLER_CANDIDATES = (" neutral", " context", " ordinary", " sample")
 TURN_FILES = runner.TURN_FILES
+ARCHIVED_QUERY_PREFIX = "\nFinal user query: "
 
 
 class ManifestError(ValueError):
@@ -134,7 +135,10 @@ def derive_archived_request(
         raise ManifestError(f"Archived recovery fact is malformed: {source_label}")
     query_ids = source_ids[query_start:query_end]
     decoded_query = _decode(tokenizer, query_ids)
-    if decoded_query != source.get("query_text") or marker not in decoded_query:
+    query_text = source.get("query_text")
+    if (not isinstance(query_text, str) or not query_text
+            or decoded_query != ARCHIVED_QUERY_PREFIX + query_text
+            or marker not in decoded_query):
         raise ManifestError(f"Decoded archived query does not match its recorded text: {source_label}")
     filler_count = target_tokens - len(source_ids)
     if filler_count < 0:

@@ -21,7 +21,7 @@ class TinyTokenizer:
     pieces = {
         10: "historical prefix ",
         11: "KVMEM_FACT_A_104729 stores cobalt-lantern-47. ",
-        12: "What is the recovery code for KVMEM_FACT_A_104729?",
+        12: "\nFinal user query: What is the recovery code for KVMEM_FACT_A_104729?",
         20: "Amber",
         21: "Birch",
         30: " neutral",
@@ -42,6 +42,7 @@ class FixtureTokenizer:
 
     def __init__(self):
         self.pieces = {100 + code: chr(code) for code in range(32, 128)}
+        self.pieces[999] = "\n"
         self.pieces.update({500 + i: word for i, word in enumerate(generator.LEAD_WORDS)})
         self.pieces[700] = " neutral"
         self.reverse = {piece: token for token, piece in self.pieces.items()}
@@ -77,7 +78,7 @@ class ArchivedTurnDerivationTests(unittest.TestCase):
             "prompt_tokens": 3,
             "prompt_token_ids": [10, 11, 12],
             "query_span": [2, 3],
-            "query_text": self.tokenizer.pieces[12],
+            "query_text": "What is the recovery code for KVMEM_FACT_A_104729?",
             "target_facts": [{
                 "marker": "KVMEM_FACT_A_104729",
                 "code": "cobalt-lantern-47",
@@ -97,7 +98,8 @@ class ArchivedTurnDerivationTests(unittest.TestCase):
             self.assertEqual(ids[1], 11)
             self.assertEqual(ids[2:7], [30] * 5)
             self.assertEqual(ids[7:], [12])
-            self.assertEqual(self.tokenizer.decode(ids[7:]), self.source["query_text"])
+            self.assertEqual(self.tokenizer.decode(ids[7:]),
+                             generator.ARCHIVED_QUERY_PREFIX + self.source["query_text"])
             self.assertIn(answer, self.tokenizer.decode(ids))
             self.assertEqual(answer, "cobalt-lantern-47")
             self.assertEqual(proof["filler_count"], 5)
@@ -148,7 +150,7 @@ class ArchivedTurnDerivationTests(unittest.TestCase):
                     marker = f"KVMEM_FACT_{slot}_{context}"
                     code = f"recovery-{slot}-{context}"
                     query = f"What is the code for {marker}?"
-                    query_ids = tokenizer.encode(query)
+                    query_ids = tokenizer.encode(generator.ARCHIVED_QUERY_PREFIX + query)
                     history_ids = tokenizer.encode(f"{marker}={code};")
                     source_length = target_tokens - 1
                     padding = source_length - 1 - len(history_ids) - len(query_ids)
