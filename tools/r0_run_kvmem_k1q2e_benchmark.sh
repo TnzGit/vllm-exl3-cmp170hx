@@ -10,6 +10,16 @@ OUT="${1:-$ROOT/results/kvmem-k1q2e-benchmark}"
 EXPECTED_SHA="${EXPECTED_SHA:?set EXPECTED_SHA to the exact benchmark head}"
 PORT="${PORT:-8002}"
 CONTEXTS=(16000 80000 160000 240000)
+GRAPH_PROBE="${K1Q2E_GRAPH_PROBE:-0}"
+if [[ "$GRAPH_PROBE" == 1 ]]; then
+  CONTEXTS=(16000)
+  EAGER=0
+elif [[ "$GRAPH_PROBE" == 0 ]]; then
+  EAGER=1
+else
+  echo "REFUSE: K1Q2E_GRAPH_PROBE must be 0 or 1" >&2
+  exit 2
+fi
 MAX_MODEL_LEN=246000
 MAX_BATCHED=1024
 MAX_TOKENS=256
@@ -169,7 +179,7 @@ PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
 echo "=== exact-token cases and benchmark-only plan ==="
 "$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_turns.py" \
   --model-dir "$MODEL_DIR" --out-dir "$OUT/turns" \
-  --contexts 4096 "${CONTEXTS[@]}"
+  --contexts 4096 16000 80000 160000 240000
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_q2d_runtime_plan.py" \
   --benchmark-case "$OUT/turns/ctx240000/turn_04_ask_d_e.json" \
@@ -194,7 +204,7 @@ VLLM_QWEN_KVMEM_Q2D_RUNTIME_PLAN="$PLAN" \
 VLLM_QWEN_KVMEM_Q2D_WORKER_STATS_PATH="$WORKER_STATS" \
 VLLM_QWEN_KVMEM_Q2D_SCHED_STATS_PATH="$SCHED_STATS" \
 VLLM_KV_CACHE_LAYOUT=BLHNC \
-ENFORCE_EAGER=1 NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 \
+ENFORCE_EAGER="$EAGER" NUM_SPEC_TOKENS=0 VLLM_EXL3_COOP=1 \
 MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" \
 MAX_MODEL_LEN="$MAX_MODEL_LEN" MAX_NUM_SEQS=1 MAX_NUM_BATCHED_TOKENS="$MAX_BATCHED" PORT="$PORT" \
   setsid bash "$REPO/tools/serve_cmp170hx_qwen_firstboot.sh" \
@@ -238,6 +248,7 @@ stop_engine
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$VENV/bin/python" "$REPO/tools/kvmem_q2e_benchmark_summarize.py" \
   --run-dir "$OUT" --contexts "${CONTEXTS[@]}" \
+  --eager "$EAGER" \
   --out "$OUT/benchmark_summary.json" | tee "$OUT/benchmark_summary.stdout.json"
 
 XID_AFTER="$(xid_now)"; XID_AFTER="${XID_AFTER:-0}"

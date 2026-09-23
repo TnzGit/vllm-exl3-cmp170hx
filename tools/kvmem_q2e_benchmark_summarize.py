@@ -23,7 +23,9 @@ def _layer_id(row: dict[str, Any]) -> int:
     return int(match.group(1))
 
 
-def summarize(run_dir: Path, contexts: list[int]) -> dict[str, Any]:
+def summarize(
+    run_dir: Path, contexts: list[int], *, eager: bool = True
+) -> dict[str, Any]:
     cells = []
     errors: list[str] = []
     for context in contexts:
@@ -91,7 +93,7 @@ def summarize(run_dir: Path, contexts: list[int]) -> dict[str, Any]:
         "benchmark": "q2e_exact_context_prefill_decode",
         "contexts": contexts,
         "performance_mode": {
-            "eager": True,
+            "eager": eager,
             "mtp": False,
             "prefix_cache": False,
             "q2e_trace": False,
@@ -111,9 +113,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--contexts", type=int, nargs="+", required=True)
+    parser.add_argument("--eager", type=int, choices=(0, 1), default=1)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = summarize(args.run_dir, args.contexts)
+    result = summarize(args.run_dir, args.contexts, eager=bool(args.eager))
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     return 0 if result["status"] == "VALID" else 3
