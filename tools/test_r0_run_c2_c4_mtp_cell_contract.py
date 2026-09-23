@@ -46,11 +46,18 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
         self.assertNotIn("ssh ", self.text)
 
     def test_manifest_r0_commit_is_matched_to_expected_checkout_commit(self):
-        self.assertIn('manifest["provenance"]["r0_source_commit"] != sys.argv[5]', self.text)
-        self.assertIn('"$OUT/input_hashes.json" "$EXPECTED_SHA"', self.text)
+        cache_helper = SCRIPT.with_name("r0_model_identity_cache.py").read_text(encoding="utf-8")
+        self.assertIn('manifest["provenance"]["r0_source_commit"] != expected_commit', cache_helper)
         self.assertIn('--expected-r0-source-commit "$EXPECTED_SHA"', self.text)
         self.assertIn('"r0_source_commit":r0_commit', self.text)
         self.assertNotIn("r0_source_sha256", self.text)
+
+    def test_model_identity_cache_preserves_per_cell_hash_evidence(self):
+        self.assertIn('IDENTITY_CACHE="$R0_ROOT/cache/r0_c2_c4_model_identity.json"', self.text)
+        self.assertIn('IDENTITY_CACHE_HELPER="$SCRIPT_DIR/r0_model_identity_cache.py"', self.text)
+        self.assertIn('--output "$OUT/input_hashes.json"', self.text)
+        self.assertIn('"$VENV/bin/python" "$IDENTITY_CACHE_HELPER"', self.text)
+        self.assertTrue(SCRIPT.with_name("r0_model_identity_cache.py").is_file())
 
     def test_dry_run_is_explicit_and_no_refusal_tree_is_referenced(self):
         self.assertIn("if (( DRY_RUN )); then", self.text)

@@ -14,7 +14,7 @@ Optional: R0_ROOT (defaults to /home/base-node/.codex_tasks/qwen38-flashnext-r0)
 
 OUT must not already exist. The manifest must contain exact token IDs and
 frozen hashes; model_pack_sha256 and tokenizer_sha256 use the canonical,
-streamed tree-hash format implemented by this runner. This command starts one
+streamed tree-hash format implemented by its identity-cache helper. This command starts one
 fresh port-8002 engine, runs one cell, and stops only its proven process group.
 EOF
 }
@@ -33,10 +33,12 @@ MANIFEST="${MANIFEST:?set MANIFEST to the frozen exact-token manifest}"
 OUT="${OUT:?set OUT to a new per-cell artifact directory}"
 R0_ROOT="${R0_ROOT:-/home/base-node/.codex_tasks/qwen38-flashnext-r0}"
 VENV="$R0_ROOT/venv"
+IDENTITY_CACHE="$R0_ROOT/cache/r0_c2_c4_model_identity.json"
 HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=246000 MAX_NUM_SEQS=4
 LAUNCH_TIMEOUT="${LAUNCH_TIMEOUT:-2400}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$SCRIPT_DIR/r0_c2_c4_mtp_matched_load.py"
+IDENTITY_CACHE_HELPER="$SCRIPT_DIR/r0_model_identity_cache.py"
 LAUNCHER="$R0_REPO/tools/serve_cmp170hx_qwen_firstboot.sh"
 
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'BLOCKED: EXPECTED_SHA must be 40 lowercase hex chars' >&2; exit 2; }
@@ -215,57 +217,13 @@ export PATH="$CUDA_HOME/bin:$VENV/bin:$PATH" VIRTUAL_ENV="$VENV"
 unset MAX_NUM_SCHEDULED_TOKENS VLLM_MAX_NUM_SCHEDULED_TOKENS
 unset VLLM_CONFIG
 
-# Stream-hash the model tree and tokenizer assets; reject symlinks and compare
-# against the frozen manifest before creating an engine. No mmap/model load.
-"$VENV/bin/python" - "$HELPER" "$MANIFEST" "$MODEL_DIR" "$OUT/input_hashes.json" "$EXPECTED_SHA" <<'PY'
-import hashlib, importlib.util, json, pathlib, sys
-helper, manifest_path, model_text, output = map(pathlib.Path, sys.argv[1:5])
-spec = importlib.util.spec_from_file_location("r0_c2_helper", helper)
-module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-manifest, raw = module.load_prompt_manifest(manifest_path)
-if manifest["provenance"]["r0_source_commit"] != sys.argv[5]:
-    raise SystemExit("BLOCKED: manifest r0_source_commit differs from EXPECTED_SHA")
-model_arg=pathlib.Path(model_text)
-if model_arg.is_symlink(): raise SystemExit("BLOCKED: model dir cannot be a symlink")
-root = model_arg.resolve()
-if not root.is_dir(): raise SystemExit("BLOCKED: model dir must be a directory")
-
-def tree_hash(paths):
-    digest = hashlib.sha256(); count = 0; total = 0
-    for path in sorted(paths, key=lambda p: p.relative_to(root).as_posix()):
-        if path.is_symlink() or not path.is_file(): raise SystemExit(f"BLOCKED: unsafe model asset: {path}")
-        rel = path.relative_to(root).as_posix().encode("utf-8")
-        digest.update(len(rel).to_bytes(8, "big")); digest.update(rel)
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024): digest.update(chunk); total += len(chunk)
-        count += 1
-    return digest.hexdigest(), count, total
-
-all_files = []
-for directory, names, files in __import__("os").walk(root, followlinks=False):
-    base = pathlib.Path(directory)
-    if any((base / name).is_symlink() for name in names): raise SystemExit("BLOCKED: symlink directory in model tree")
-    all_files.extend(base / name for name in files)
-model_hash, model_count, model_bytes = tree_hash(all_files)
-token_names = {"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "added_tokens.json", "tokenizer.model", "spiece.model", "vocab.json", "vocab.txt", "merges.txt", "chat_template.jinja"}
-token_files = [p for p in all_files if p.name in token_names]
-if not token_files: raise SystemExit("BLOCKED: no recognized tokenizer assets in model tree")
-token_hash, token_count, token_bytes = tree_hash(token_files)
-config = root / "config.json"
-if config.is_symlink() or not config.is_file(): raise SystemExit("BLOCKED: config.json is not a regular file")
-config_digest = hashlib.sha256()
-with config.open("rb") as stream:
-    while chunk := stream.read(1024 * 1024): config_digest.update(chunk)
-config_hash = config_digest.hexdigest()
-expected = manifest["provenance"]
-for name, actual in (("model_pack_sha256", model_hash), ("tokenizer_sha256", token_hash), ("model_config_sha256", config_hash)):
-    if expected.get(name) != actual: raise SystemExit(f"BLOCKED: actual {name} differs from frozen manifest")
-with open(output, "x", encoding="utf-8") as stream:
-    json.dump({"model_tree_sha256": model_hash, "model_file_count": model_count, "model_bytes_hashed": model_bytes,
-               "model_config_sha256": config_hash, "tokenizer_tree_sha256": token_hash,
-               "tokenizer_file_count": token_count, "tokenizer_bytes_hashed": token_bytes,
-               "manifest_sha256": module.sha256_bytes(raw)}, stream, indent=2, sort_keys=True); stream.write("\n")
-PY
+# Hash once, then reuse only while the complete file set and inode metadata
+# plus exact frozen-manifest hash remain identical on the trusted local FS.
+[[ -f "$IDENTITY_CACHE_HELPER" ]] || die 'model identity cache helper is missing'
+"$VENV/bin/python" "$IDENTITY_CACHE_HELPER" \
+  --manifest "$MANIFEST" --model "$MODEL_DIR" --cache "$IDENTITY_CACHE" \
+  --output "$OUT/input_hashes.json" --expected-r0-source-commit "$EXPECTED_SHA" \
+  || die 'model identity cache verification failed'
 
 (( $(port_listener_count) == 0 )) || die 'port 8002 has a listener before launch'
 port_is_open && die 'port 8002 accepts connections before launch'
