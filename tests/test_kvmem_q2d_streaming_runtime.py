@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -19,6 +20,7 @@ from vllm_exl3.kvmem_q2d_streaming_worker import (
     _logical_write_ids,
     _prepare_forward_table,
     _selected_history_page_tensor,
+    _skip_synthetic_graph_forward,
     _stage_history,
     _update_dynamic_table,
     _verify_dynamic_table,
@@ -81,6 +83,24 @@ def _manager():
         needs_kv_cache_zeroing=False,
     )
     return spec, manager
+
+
+def test_graph_probe_skips_only_uncaptured_synthetic_padding(monkeypatch):
+    from vllm.config import CUDAGraphMode
+    import vllm.forward_context as forward_context
+
+    context = SimpleNamespace(
+        cudagraph_runtime_mode=CUDAGraphMode.NONE,
+        is_padding=torch.tensor([True, True]),
+    )
+    monkeypatch.setattr(forward_context, "get_forward_context", lambda: context)
+    query = torch.empty(2)
+    assert _skip_synthetic_graph_forward(query)
+    context.is_padding = torch.tensor([True, False])
+    assert not _skip_synthetic_graph_forward(query)
+    context.is_padding = torch.tensor([True, True])
+    context.cudagraph_runtime_mode = CUDAGraphMode.PIECEWISE
+    assert not _skip_synthetic_graph_forward(query)
 
 
 def test_runtime_plan_freezes_partition_and_cpu_capacity():
