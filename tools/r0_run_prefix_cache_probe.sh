@@ -210,7 +210,7 @@ EOF
 
 event "RUN_START sha=$ACTUAL_SHA port=$PORT prefix=on mtp_k=$NUM_SPEC_TOKENS"
 : > "$OUT/server.log"; : > "$OUT/startup.txt"
-MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAX_MODEL_LEN" \
+env MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAX_MODEL_LEN" \
   MAX_NUM_SEQS=1 PORT="$PORT" HOST="$HOST" PREFIX_CACHING=1 NUM_SPEC_TOKENS=3 \
   MAX_NUM_BATCHED_TOKENS= TORCH_PROFILER_DIR= \
   setsid bash "$R0_REPO/tools/serve_cmp170hx_qwen_firstboot.sh" > "$OUT/server.log" 2>&1 < /dev/null &
