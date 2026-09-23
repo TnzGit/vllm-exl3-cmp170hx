@@ -31,6 +31,18 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
         helper = SCRIPT.with_name("r0_c2_c4_mtp_matched_load.py").read_text(encoding="utf-8")
         self.assertIn('"max_model_len": 240_000', helper)
 
+    def test_reduced_graph_list_is_fixed_and_checked_at_three_layers(self):
+        self.assertIn("CUDAGRAPH_CAPTURE_SIZES='[1,2,4,8,16,24]'", self.text)
+        self.assertIn('R0_CUDAGRAPH_CAPTURE_SIZES="$CUDAGRAPH_CAPTURE_SIZES"', self.text)
+        self.assertIn('graph.get("cudagraph_capture_sizes") != [1,2,4,8,16,24]', self.text)
+        self.assertIn('"R0_CUDAGRAPH_CAPTURE_SIZES":"[1,2,4,8,16,24]"', self.text)
+        helper = SCRIPT.with_name("r0_c2_c4_mtp_matched_load.py").read_text(encoding="utf-8")
+        self.assertIn('"cudagraph_capture_sizes": [1, 2, 4, 8, 16, 24]', helper)
+        self.assertIn("parse_enginecore_graph_capture_evidence(log_text)", helper)
+        launcher = SCRIPT.with_name("serve_cmp170hx_qwen_firstboot.sh").read_text(encoding="utf-8")
+        self.assertIn('"${R0_CUDAGRAPH_CAPTURE_SIZES:-}"', launcher)
+        self.assertIn('config["cudagraph_capture_sizes"] = sizes', launcher)
+
     def test_proof_gate_precedes_first_helper_execution(self):
         proof = self.text.index('"$OUT/runtime_proof_build.log" 2>&1 <<\'PY\'')
         execute = self.text.index('"$HELPER" --manifest "$MANIFEST" --expected-r0-source-commit "$EXPECTED_SHA" --execute')

@@ -71,12 +71,20 @@ PY
 )"
 
 COMPILATION_CONFIG="$(
-  python - "$SPLIT_OPS" <<'PY'
+  python - "$SPLIT_OPS" "${R0_CUDAGRAPH_CAPTURE_SIZES:-}" <<'PY'
 import json
 import sys
 
 ops = json.loads(sys.argv[1])
-print(json.dumps({"cudagraph_mode": "PIECEWISE", "splitting_ops": ops}))
+config = {"cudagraph_mode": "PIECEWISE", "splitting_ops": ops}
+if sys.argv[2]:
+    sizes = json.loads(sys.argv[2])
+    if (not isinstance(sizes, list) or not sizes
+            or any(type(size) is not int or size < 1 for size in sizes)
+            or sizes != sorted(set(sizes))):
+        raise SystemExit("REFUSE: R0_CUDAGRAPH_CAPTURE_SIZES must be an ascending unique positive-integer JSON list")
+    config["cudagraph_capture_sizes"] = sizes
+print(json.dumps(config))
 PY
 )"
 

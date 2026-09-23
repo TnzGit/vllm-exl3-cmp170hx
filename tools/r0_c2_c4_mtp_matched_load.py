@@ -38,6 +38,7 @@ SCHEDULED_TOKEN_LINE = re.compile(
     r"max_num_scheduled_tokens is set to\s+([0-9][0-9,]*)\s+based on the speculative decoding settings\."
 )
 KV_POOL_LINE = re.compile(r"GPU KV cache size:\s*([0-9][0-9,]*) tokens\b")
+GRAPH_CAPTURE_SIZES_LINE = re.compile(r"'cudagraph_capture_sizes': \[([0-9, ]+)\]")
 COUNTERS = {
     "drafts": "vllm:spec_decode_num_drafts_total",
     "draft_tokens": "vllm:spec_decode_num_draft_tokens_total",
@@ -60,6 +61,7 @@ TURN_FILES = ("turn_00_ask_a.json", "turn_01_ask_b.json", "turn_02_ask_a_paraphr
 FROZEN_CONFIG = {
     "coop": True,
     "graph_mode": "PIECEWISE",
+    "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 24],
     "text_only": True,
     "disk_ngram": True,
     "profiler": False,
@@ -106,6 +108,27 @@ def parse_enginecore_startup_evidence(log_text: str) -> dict[str, Any]:
     }
 
 
+def parse_enginecore_graph_capture_evidence(log_text: str) -> dict[str, Any]:
+    """Require one effective graph list from EngineCore, not API arguments."""
+    matches: list[tuple[list[int], str]] = []
+    for line in log_text.splitlines():
+        if not ENGINECORE_PREFIX.search(line):
+            continue
+        match = GRAPH_CAPTURE_SIZES_LINE.search(line)
+        if match:
+            sizes = [int(value.strip()) for value in match.group(1).split(",")]
+            matches.append((sizes, line.strip()))
+    if len(matches) != 1:
+        raise CellError(
+            "startup proof incomplete: expected exactly one EngineCore "
+            f"effective graph capture list, found {len(matches)}"
+        )
+    sizes, line = matches[0]
+    if sizes != sorted(set(sizes)) or not sizes or sizes[0] < 1:
+        raise CellError("EngineCore graph capture list is invalid")
+    return {"observed_enginecore_graph_capture_sizes": sizes, "graph_log_line": line}
+
+
 def make_runtime_proof(
     manifest: dict[str, Any],
     log_text: str,
@@ -118,6 +141,11 @@ def make_runtime_proof(
     if point in BLOCKED_POINTS:
         raise CellError(BLOCKED_POINTS[point])
     evidence = parse_enginecore_startup_evidence(log_text)
+    graph_evidence = parse_enginecore_graph_capture_evidence(log_text)
+    if graph_evidence["observed_enginecore_graph_capture_sizes"] != FROZEN_CONFIG[
+        "cudagraph_capture_sizes"
+    ]:
+        raise CellError("EngineCore graph capture sizes differ from frozen list")
     if evidence["observed_enginecore_max_num_scheduled_tokens"] != expected_budget:
         raise CellError(
             "EngineCore scheduled-token observation differs from frozen auto budget"
@@ -153,6 +181,11 @@ def make_runtime_proof(
         "config": {
             **FROZEN_CONFIG,
             "effective_max_num_batched_tokens": expected_budget,
+        },
+        "graph_capture_evidence": {
+            "kind": "vllm_0.29.0_enginecore_effective_compilation_config",
+            "log_line_source": "EngineCore",
+            **graph_evidence,
         },
         "effective_budget_evidence": {
             "kind": "vllm_0.29.0_enginecore_source_inference",
@@ -436,6 +469,23 @@ def validate_runtime_proof(
     for name, expected in FROZEN_CONFIG.items():
         if config.get(name) != expected:
             raise CellError(f"Observed runtime config mismatch: {name}")
+    graph_evidence = proof.get("graph_capture_evidence")
+    if not isinstance(graph_evidence, dict) or (
+        graph_evidence.get("kind")
+        != "vllm_0.29.0_enginecore_effective_compilation_config"
+        or graph_evidence.get("log_line_source") != "EngineCore"
+        or graph_evidence.get("observed_enginecore_graph_capture_sizes")
+        != FROZEN_CONFIG["cudagraph_capture_sizes"]
+    ):
+        raise CellError("Runtime proof lacks matching EngineCore graph capture evidence")
+    graph_line = graph_evidence.get("graph_log_line")
+    if not isinstance(graph_line, str) or not ENGINECORE_PREFIX.search(graph_line):
+        raise CellError("Graph capture evidence lacks original EngineCore log line")
+    match = GRAPH_CAPTURE_SIZES_LINE.search(graph_line)
+    if not match or [int(value.strip()) for value in match.group(1).split(",")] != FROZEN_CONFIG[
+        "cudagraph_capture_sizes"
+    ]:
+        raise CellError("EngineCore log text does not support frozen graph capture sizes")
     effective = config.get("effective_max_num_batched_tokens")
     if type(effective) is not int or effective <= 0:
         raise CellError("Runtime proof needs positive effective auto token budget")

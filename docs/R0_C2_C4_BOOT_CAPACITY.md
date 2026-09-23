@@ -43,20 +43,20 @@ References: [`R0_MTP_K3_PRODUCTION.md`](R0_MTP_K3_PRODUCTION.md),
 [`R0_MTP_POST_COOP.md`](R0_MTP_POST_COOP.md), and
 [`R0_PREFILL_SCAN_LIVE2.md`](R0_PREFILL_SCAN_LIVE2.md).
 
-## Selected prospective protocol revision
+## First 240K protocol revision (historical)
 
-The user selected **`max_model_len=240000` with the default PIECEWISE
-capture sizes** as the final benchmark configuration. Preserve
+The user initially selected **`max_model_len=240000` with the default
+PIECEWISE capture sizes** for the benchmark. Preserve
 `gpu_memory_utilization=0.92` and `max_num_seqs=4`; retain the runtime's default
 effective capture list rather than changing it. This selection updates the
 protocol only and does not change the factual 246000 boot-capacity NO-GO above.
 
-The explicit PIECEWISE capture-size set `[1,2,4,8,16,24]` is deferred and
-unrun; it is not part of the selected configuration. If reconsidered later,
-record the launch configuration and source/model identity, effective capture
-list, graph-capture memory, available KV GiB and token pool, estimated maximum
-model length, health and exit status, GPU/process snapshots, Xid counts, and
-port state. Keep graph-memory profiling/accounting enabled: setting
+The explicit PIECEWISE capture-size set `[1,2,4,8,16,24]` was deferred at
+that point. For any later revision, record the launch configuration and
+source/model identity, effective capture list, graph-capture memory, available
+KV GiB and token pool, estimated maximum model length, health and exit status,
+GPU/process snapshots, Xid counts, and port state. Keep graph-memory
+profiling/accounting enabled: setting
 `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0` changes the accounting basis and
 is not an accepted way to claim real graph-memory reduction.
 
@@ -112,3 +112,16 @@ matched k=2/k=3 speed comparison yet. A smaller fixed graph-capture list
 would constitute a further protocol revision and require both k values to
 be rerun under the same exact configuration; these default-graph results
 must not be pooled with such a revision.
+
+## Approved reduced-graph 240K revision (prospective)
+
+The user approved the uniform `[1,2,4,8,16,24]` PIECEWISE capture list after
+the default-graph k=3 failure. The runner now pins and checks that list in
+its environment and actual vLLM argv, while the runtime proof must read the
+effective list from EngineCore's normalized compilation config. This changes
+neither the 240K maximum length nor `.92` memory utilization, `max_num_seqs=4`,
+MTP k values, prompts, resident/semantic gates, or graph-memory accounting.
+Every cell under this revision needs a fresh engine and a new exact source SHA;
+none of the earlier default-graph results counts as a matched speed result.
+If k=3 still fails admission, retain the boot NO-GO and stop rather than
+altering another memory parameter.

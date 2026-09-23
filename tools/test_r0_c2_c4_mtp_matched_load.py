@@ -80,6 +80,16 @@ def valid_manifest() -> dict:
 
 
 class C2C4MatchedLoadTests(unittest.TestCase):
+    def test_graph_capture_proof_requires_effective_enginecore_list(self) -> None:
+        api_line = "(APIServer pid=1) INFO 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24]"
+        engine_line = "(EngineCore pid=2) INFO 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24]"
+        with self.assertRaisesRegex(runner.CellError, "EngineCore"):
+            runner.parse_enginecore_graph_capture_evidence(api_line)
+        evidence = runner.parse_enginecore_graph_capture_evidence(api_line + "\n" + engine_line)
+        self.assertEqual(evidence["observed_enginecore_graph_capture_sizes"], [1, 2, 4, 8, 16, 24])
+        with self.assertRaisesRegex(runner.CellError, "exactly one"):
+            runner.parse_enginecore_graph_capture_evidence(engine_line + "\n" + engine_line)
+
     def test_startup_proof_requires_enginecore_and_rejects_conflicts(self) -> None:
         api_only = (
             "(APIServer pid=1) WARNING [vllm.py:1924] max_num_scheduled_tokens "
@@ -254,6 +264,12 @@ class C2C4MatchedLoadTests(unittest.TestCase):
                     "runtime_expectations"
                 ]["effective_max_num_batched_tokens"],
             },
+            "graph_capture_evidence": {
+                "kind": "vllm_0.29.0_enginecore_effective_compilation_config",
+                "log_line_source": "EngineCore",
+                "observed_enginecore_graph_capture_sizes": [1, 2, 4, 8, 16, 24],
+                "graph_log_line": "(EngineCore pid=2) INFO 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24]",
+            },
             "effective_budget_evidence": {
                 "kind": "vllm_0.29.0_enginecore_source_inference",
                 "log_line_source": "EngineCore",
@@ -270,6 +286,10 @@ class C2C4MatchedLoadTests(unittest.TestCase):
             },
         }
         runner.validate_runtime_proof(proof, manifest, "c2_80k", 2)
+        proof["config"]["cudagraph_capture_sizes"] = [1, 2, 3, 4, 6, 8, 12, 16, 24]
+        with self.assertRaisesRegex(runner.CellError, "cudagraph_capture_sizes"):
+            runner.validate_runtime_proof(proof, manifest, "c2_80k", 2)
+        proof["config"]["cudagraph_capture_sizes"] = [1, 2, 4, 8, 16, 24]
         proof["config"]["prefix_caching"] = True
         with self.assertRaisesRegex(runner.CellError, "prefix_caching"):
             runner.validate_runtime_proof(proof, manifest, "c2_80k", 2)

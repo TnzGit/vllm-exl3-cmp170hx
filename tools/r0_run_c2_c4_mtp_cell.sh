@@ -40,6 +40,7 @@ R0_ROOT="${R0_ROOT:-/home/base-node/.codex_tasks/qwen38-flashnext-r0}"
 VENV="$R0_ROOT/venv"
 IDENTITY_CACHE="$R0_ROOT/cache/r0_c2_c4_model_identity.json"
 HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=240000 MAX_NUM_SEQS=4
+CUDAGRAPH_CAPTURE_SIZES='[1,2,4,8,16,24]'
 LAUNCH_TIMEOUT="${LAUNCH_TIMEOUT:-2400}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$SCRIPT_DIR/r0_c2_c4_mtp_matched_load.py"
@@ -54,8 +55,8 @@ LAUNCHER="$R0_REPO/tools/serve_cmp170hx_qwen_firstboot.sh"
 
 if (( DRY_RUN )); then
   "$VENV/bin/python" "$HELPER" --manifest "$MANIFEST" --expected-r0-source-commit "$EXPECTED_SHA" --dry-run >/dev/null
-  printf 'DRY_RUN point=%s k=%s port=%s gpu_memory_utilization=%s max_model_len=%s max_num_seqs=%s max_num_batched_tokens=auto coop=1 graph=PIECEWISE text_only=1 disk_ngram=1 profiler=off prefix_caching=off\n' \
-    "$POINT" "$K" "$PORT" "$GPU_MEM_UTIL" "$MAX_MODEL_LEN" "$MAX_NUM_SEQS"
+  printf 'DRY_RUN point=%s k=%s port=%s gpu_memory_utilization=%s max_model_len=%s max_num_seqs=%s max_num_batched_tokens=auto coop=1 graph=PIECEWISE graph_capture_sizes=%s text_only=1 disk_ngram=1 profiler=off prefix_caching=off\n' \
+    "$POINT" "$K" "$PORT" "$GPU_MEM_UTIL" "$MAX_MODEL_LEN" "$MAX_NUM_SEQS" "$CUDAGRAPH_CAPTURE_SIZES"
   exit 0
 fi
 
@@ -256,6 +257,7 @@ gpu_mem_util=$GPU_MEM_UTIL
 max_model_len=$MAX_MODEL_LEN
 max_num_seqs=$MAX_NUM_SEQS
 max_num_batched_tokens=auto
+cudagraph_capture_sizes=$CUDAGRAPH_CAPTURE_SIZES
 mtp_k=$K
 EOF
 
@@ -263,6 +265,7 @@ printf '[%s] launch point=%s k=%s\n' "$(timestamp)" "$POINT" "$K" > "$OUT/server
 env MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAX_MODEL_LEN" \
   MAX_NUM_SEQS="$MAX_NUM_SEQS" PORT="$PORT" HOST="$HOST" PREFIX_CACHING=0 \
   NUM_SPEC_TOKENS="$K" MAX_NUM_BATCHED_TOKENS= TORCH_PROFILER_DIR= ENFORCE_EAGER=0 \
+  R0_CUDAGRAPH_CAPTURE_SIZES="$CUDAGRAPH_CAPTURE_SIZES" \
   VLLM_EXL3_COOP=1 VLLM_EXL3_NGRAM_TABLE=disk VLLM_EXL3_NGRAM_KERNEL=ext \
   setsid bash "$LAUNCHER" >> "$OUT/server.log" 2>&1 < /dev/null &
 ACTIVE_PID=$!
@@ -319,6 +322,8 @@ try: graph=json.loads(args[args.index("--compilation-config")+1])
 except (ValueError,IndexError,json.JSONDecodeError): raise SystemExit("BLOCKED: cannot parse live compilation config")
 if graph.get("cudagraph_mode") != "PIECEWISE":
     raise SystemExit("BLOCKED: live compilation config is not PIECEWISE")
+if graph.get("cudagraph_capture_sizes") != [1,2,4,8,16,24]:
+    raise SystemExit("BLOCKED: live compilation graph capture sizes differ from frozen list")
 try: spec=args[args.index("--speculative-config")+1]
 except (ValueError,IndexError): raise SystemExit("BLOCKED: live argv lacks speculative config")
 try: value=json.loads(spec)
@@ -331,6 +336,7 @@ expected={"GPU_MEM_UTIL":"0.92","MAX_MODEL_LEN":"240000","MAX_NUM_SEQS":"4","POR
           "HOST":"127.0.0.1","PREFIX_CACHING":"0","NUM_SPEC_TOKENS":sys.argv[2],
           "MAX_NUM_BATCHED_TOKENS":"","VLLM_EXL3_COOP":"1","VLLM_EXL3_NGRAM_TABLE":"disk",
           "VLLM_EXL3_NGRAM_KERNEL":"ext",
+          "R0_CUDAGRAPH_CAPTURE_SIZES":"[1,2,4,8,16,24]",
           "TORCH_PROFILER_DIR":"","ENFORCE_EAGER":"0"}
 for name, wanted in expected.items():
     if env.get(name) != wanted: raise SystemExit(f"BLOCKED: live environment mismatch for {name}")
