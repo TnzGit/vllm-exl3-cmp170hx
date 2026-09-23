@@ -1,8 +1,9 @@
-"""CPU-only deterministic manifest generator tests."""
+"""CPU-only tests for transparent archived-turn prompt derivation."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,136 +17,180 @@ generator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(generator)
 
 
-class FakeTokenizer:
+class TinyTokenizer:
+    pieces = {
+        10: "historical prefix ",
+        11: "KVMEM_FACT_A_104729 stores cobalt-lantern-47. ",
+        12: "What is the recovery code for KVMEM_FACT_A_104729?",
+        20: "Amber",
+        21: "Birch",
+        30: " neutral",
+    }
+
+    def encode(self, text, add_special_tokens=False):
+        reverse = {value: key for key, value in self.pieces.items()}
+        if text in reverse:
+            return [reverse[text]]
+        raise ValueError("test tokenizer accepts only its fixture token strings")
+
+    def decode(self, ids, **kwargs):
+        return "".join(self.pieces[token] for token in ids)
+
+
+class FixtureTokenizer:
     all_special_ids = [0]
 
     def __init__(self):
-        alphabet = set(
-            generator.PROMPT_PREFIX.format(lead="Amber")
-            + generator.PROMPT_SUFFIX.format(answer="r0-c2-c4-c2_16k-0")
-            + "".join(generator.LEAD_WORDS)
-        )
-        alphabet.update("0123456789_")
-        self.char_to_id = {char: index + 1 for index, char in enumerate(sorted(alphabet))}
-        self.id_to_piece = {value: key for key, value in self.char_to_id.items()}
-        self.filler_id = len(self.char_to_id) + 1
-        self.id_to_piece[self.filler_id] = " neutral"
+        self.pieces = {100 + code: chr(code) for code in range(32, 128)}
+        self.pieces.update({500 + i: word for i, word in enumerate(generator.LEAD_WORDS)})
+        self.pieces[700] = " neutral"
+        self.reverse = {piece: token for token, piece in self.pieces.items()}
 
     def __len__(self):
-        return self.filler_id + 1
+        return 1000
 
     def get_vocab(self):
-        return {piece: token for token, piece in self.id_to_piece.items()}
+        return self.reverse
 
     def encode(self, text, add_special_tokens=False):
+        if text in self.reverse:
+            return [self.reverse[text]]
         ids = []
-        index = 0
-        while index < len(text):
-            if text.startswith(" neutral", index):
-                ids.append(self.filler_id)
-                index += len(" neutral")
+        position = 0
+        while position < len(text):
+            if text.startswith(" neutral", position):
+                ids.append(700)
+                position += len(" neutral")
             else:
-                ids.append(self.char_to_id[text[index]])
-                index += 1
+                ids.append(self.reverse[text[position]])
+                position += 1
         return ids
 
-    def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-        return "".join(self.id_to_piece[token] for token in ids)
+    def decode(self, ids, **kwargs):
+        return "".join(self.pieces[token] for token in ids)
 
 
-def args_for(root: Path, tokenizer_path: Path | None = None):
-    return SimpleNamespace(
-        model_path=root,
-        tokenizer_path=tokenizer_path or root,
-        model="local-test-model",
-        model_revision_sha256="a" * 64,
-        installed_exl3_source_sha256="b" * 64,
-        r0_source_commit="c" * 40,
-        vllm_version="0.29.0",
-        exllamav3_revision="d" * 40,
-        driver_version="test-driver",
-        cuda_version="test-cuda",
-        torch_version="test-torch",
-        effective_max_num_batched_tokens=2048,
-    )
+class ArchivedTurnDerivationTests(unittest.TestCase):
+    def setUp(self):
+        self.tokenizer = TinyTokenizer()
+        self.source = {
+            "prompt_tokens": 3,
+            "prompt_token_ids": [10, 11, 12],
+            "query_span": [2, 3],
+            "query_text": self.tokenizer.pieces[12],
+            "target_facts": [{
+                "marker": "KVMEM_FACT_A_104729",
+                "code": "cobalt-lantern-47",
+            }],
+        }
 
-
-class C2C4ManifestGeneratorTests(unittest.TestCase):
-    @staticmethod
-    def make_assets(root: Path):
-        (root / "config.json").write_text('{"model_type":"test"}', encoding="utf-8")
-        (root / "tokenizer.json").write_text('{"version":"1.0"}', encoding="utf-8")
-
-    def test_output_is_deterministic_exact_length_and_disjoint_by_lead(self):
+    def test_derivation_preserves_archived_ids_and_inserts_filler_before_query(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            self.make_assets(root)
-            args = args_for(root)
-            tokenizer = FakeTokenizer()
-            first = generator.make_manifest(args, lambda _: tokenizer)
-            second = generator.make_manifest(args, lambda _: tokenizer)
-        self.assertEqual(first, second)
-        self.assertEqual(first["provenance"]["r0_source_commit"], "c" * 40)
-        self.assertNotIn("r0_source_sha256", first["provenance"])
-        all_leads = []
-        for point, geometry in generator.runner.POINTS.items():
-            requests = first["points"][point]["requests"]
-            self.assertEqual(
-                [len(item["token_ids"]) for item in requests],
-                [geometry["prompt_tokens"]] * geometry["concurrency"],
+            source_file = Path(temp) / "turn.json"
+            source_file.write_text("archived parent fixture", encoding="utf-8")
+            ids, answer, proof = generator.derive_archived_request(
+                self.tokenizer, self.source, source_file, "ctx16000/turn_00_ask_a.json",
+                target_tokens=8, lead_token=20, filler_id=30,
             )
-            self.assertEqual(
-                len({item["token_ids"][0] for item in requests}),
-                geometry["concurrency"],
+            self.assertEqual(len(ids), 8)
+            self.assertEqual(ids[0], 20)
+            self.assertEqual(ids[1], 11)
+            self.assertEqual(ids[2:7], [30] * 5)
+            self.assertEqual(ids[7:], [12])
+            self.assertEqual(self.tokenizer.decode(ids[7:]), self.source["query_text"])
+            self.assertIn(answer, self.tokenizer.decode(ids))
+            self.assertEqual(answer, "cobalt-lantern-47")
+            self.assertEqual(proof["filler_count"], 5)
+            self.assertEqual(proof["source_token_ids_sha256"],
+                             generator.runner.token_ids_sha256([10, 11, 12]))
+            self.assertEqual(proof["input_classification"],
+                             "derived; not historical byte-identical input")
+
+    def test_derivation_fails_if_query_text_or_single_recovery_fact_is_ambiguous(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source_file = Path(temp) / "turn.json"
+            source_file.write_text("parent", encoding="utf-8")
+            bad_query = {**self.source, "query_text": "different"}
+            with self.assertRaisesRegex(generator.ManifestError, "Decoded archived query"):
+                generator.derive_archived_request(
+                    self.tokenizer, bad_query, source_file, "ctx16000/turn_00_ask_a.json", 8, 20, 30
+                )
+            bad_facts = {**self.source, "target_facts": self.source["target_facts"] * 2}
+            with self.assertRaisesRegex(generator.ManifestError, "exactly one"):
+                generator.derive_archived_request(
+                    self.tokenizer, bad_facts, source_file, "ctx16000/turn_00_ask_a.json", 8, 20, 30
+                )
+
+    def test_derivation_fails_if_source_exceeds_requested_length(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source_file = Path(temp) / "turn.json"
+            source_file.write_text("parent", encoding="utf-8")
+            with self.assertRaisesRegex(generator.ManifestError, "exceeds target"):
+                generator.derive_archived_request(
+                    self.tokenizer, self.source, source_file, "ctx16000/turn_00_ask_a.json", 2, 20, 30
+                )
+
+    def test_manifest_builder_uses_only_archived_turns_and_marks_c4_32k_blocked(self):
+        tokenizer = FixtureTokenizer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model = root / "model"
+            tokenizer_path = model / "tokenizer"
+            tokenizer_path.mkdir(parents=True)
+            (model / "config.json").write_text("{}", encoding="utf-8")
+            (tokenizer_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            sources = root / "sources"
+            for context in (16000, 80000):
+                folder = sources / f"ctx{context}"
+                folder.mkdir(parents=True)
+                target_tokens = 15_533 if context == 16000 else 79_533
+                for slot, filename in enumerate(generator.TURN_FILES):
+                    marker = f"KVMEM_FACT_{slot}_{context}"
+                    code = f"recovery-{slot}-{context}"
+                    query = f"What is the code for {marker}?"
+                    query_ids = tokenizer.encode(query)
+                    history_ids = tokenizer.encode(f"{marker}={code};")
+                    source_length = target_tokens - 1
+                    padding = source_length - 1 - len(history_ids) - len(query_ids)
+                    source_ids = [tokenizer.reverse["x"]] + history_ids + [
+                        tokenizer.reverse["x"]
+                    ] * padding + query_ids
+                    query_start = len(source_ids) - len(query_ids)
+                    source = {
+                        "context_limit": context,
+                        "prompt_tokens": len(source_ids),
+                        "prompt_token_ids": source_ids,
+                        "query_span": [query_start, len(source_ids)],
+                        "query_text": query,
+                        "target_facts": [{"marker": marker, "code": code}],
+                    }
+                    (folder / filename).write_text(json.dumps(source), encoding="utf-8")
+            args = SimpleNamespace(
+                model_path=model,
+                tokenizer_path=tokenizer_path,
+                source_prompts=sources,
+                model="fixture-model",
+                model_revision_sha256="a" * 64,
+                installed_exl3_source_sha256="b" * 64,
+                r0_source_commit="c" * 40,
+                vllm_version="0.29.0",
+                exllamav3_revision="d" * 40,
+                driver_version="fixture-driver",
+                cuda_version="fixture-cuda",
+                torch_version="fixture-torch",
+                effective_max_num_batched_tokens=2048,
             )
-            all_leads.extend(item["token_ids"][0] for item in requests)
-            for item in requests:
-                self.assertEqual(
-                    item["token_ids_sha256"],
-                    generator.runner.token_ids_sha256(item["token_ids"]),
-                )
-                prompt_text = tokenizer.decode(item["token_ids"])
-                self.assertIn("Reply with exactly the answer code", prompt_text)
-                self.assertTrue(prompt_text.endswith(item["expected_answer"]))
-                self.assertEqual(
-                    tokenizer.encode(prompt_text, add_special_tokens=False),
-                    item["token_ids"],
-                )
-        self.assertEqual(len(set(all_leads)), len(all_leads))
-
-    def test_fails_closed_when_tokenizer_cannot_supply_distinct_leads(self):
-        class TinyTokenizer:
-            all_special_ids = [0, 2]
-
-            def __len__(self):
-                return 4
-
-            def get_vocab(self):
-                return {"only": 1}
-
-            def encode(self, text, add_special_tokens=False):
-                return [1]
-
-            def decode(self, ids, **kwargs):
-                return " neutral"
-
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            self.make_assets(root)
-            with self.assertRaisesRegex(generator.ManifestError, "distinct ordinary lead"):
-                generator.make_manifest(args_for(root), lambda _: TinyTokenizer())
-
-    def test_fails_closed_for_tokenizer_outside_model_tree(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            model, tokenizer = root / "model", root / "tokenizer"
-            model.mkdir()
-            tokenizer.mkdir()
-            self.make_assets(model)
-            with self.assertRaisesRegex(generator.ManifestError, "inside model path"):
-                generator.make_manifest(
-                    args_for(model, tokenizer), lambda _: FakeTokenizer()
-                )
+            manifest = generator.make_manifest(args, lambda _: tokenizer)
+        self.assertEqual(set(manifest["points"]), {"c2_16k", "c2_80k", "c4_16k"})
+        self.assertEqual(manifest["blocked_points"], generator.runner.BLOCKED_POINTS)
+        self.assertEqual(manifest["input_classification"],
+                         "derived_from_archived_turns_not_historical_byte_identical")
+        for point, spec in manifest["points"].items():
+            for request in spec["requests"]:
+                self.assertEqual(len(request["token_ids"]), spec["prompt_tokens"])
+                self.assertEqual(request["derivation"]["source_file_sha256"].__len__(), 64)
+                self.assertEqual(request["derivation"]["expected_single_recovery_code"],
+                                 request["expected_answer"])
 
 
 if __name__ == "__main__":

@@ -20,17 +20,38 @@ across all cells). Port 8002. Do not tune the envelope per k or per workload.
 | Cell family | Simultaneous requests | Per-request input | Output per request |
 |---|---:|---:|---:|
 | C2 | 2 | 16K: 15,533 exact tokens; 80K: 79,533 exact tokens | 256 tokens |
-| C4 | 4 | 16K: 15,533 exact tokens; 32K: 27,250 exact tokens (the existing k3 “32K” case) | 256 tokens |
+| C4 | 4 | 16K: 15,533 exact tokens; 32K: **BLOCKED** | 256 tokens |
 
-These are four load points, each run at k=2 and k=3 (eight fresh-engine cells).
-Freeze and hash the exact token-ID inputs before the first cell; use identical
-IDs for the paired k runs, distinct content across simultaneous request slots,
-and no shared prefix. The 16K/80K token counts and the 32K case's 27,250-token
-count are documented in [`R0_PREFILL_SCAN_LIVE2.md`](R0_PREFILL_SCAN_LIVE2.md)
-and [`R0_MTP_K3_PRODUCTION.md`](R0_MTP_K3_PRODUCTION.md); the scan's raw
-prompt files are referenced on the remote host, not present in this checkout.
-If the exact IDs cannot be recovered and hashed (including the 32K case), mark
-that point BLOCKED; do not silently regenerate an approximate-length prompt.
+The runnable matrix is exactly c2_16k, c2_80k, and c4_16k, each at k=2 and
+k=3 (six fresh-engine cells). The archived historical turn JSON files are now
+available under `evidence/c2c4-source-prompts/ctx16000/` and
+`ctx80000/`. They were copied from the remote archive
+`/home/base-node/.codex_tasks/qwen38-flashnext-r0/results/kvmem-k1q2e-benchmark-61a8eb2-live3/turns/`;
+the committed files and generated manifest retain SHA-256 provenance. The
+additional `prompt_15533.json` and `prompt_79533.json` came from
+`r0-prefill-scan-9da3ace-live2/prompt_cases/` and are historical references,
+not substitutes for concurrent request slots. Manifest generation derives
+each request from a distinct archived
+turn in slot order A, B, A-paraphrase, C (C2 uses A and B). It preserves all
+archived token IDs except token 0, which is replaced by a distinct ordinary
+single-token lead; neutral single-token filler IDs are inserted immediately
+before the archived query span to reach exactly 15,533 or 79,533 tokens. For
+every request the manifest records the parent relative path, parent file
+SHA-256, parent token-ID SHA-256, query spans, lead replacement, filler
+ID/count, decoded query, recovery marker, expected single recovery code, and
+derived token-ID SHA-256. Generation verifies the decoded query against the
+archived `query_text`, checks that exactly one recovery fact is declared and
+its marker/code survive decoding, and confirms exact length. The same frozen
+manifest supplies identical derived IDs to k=2 and k=3; simultaneous requests
+must have no common prefix.
+
+These are **derived inputs, not historical byte-identical inputs**: token 0 is
+changed and neutral IDs are inserted. Results must be described accordingly;
+they must not be represented as measurements on byte-identical historical
+prompts. The historical 27,250-token C4 input is not recoverable, so c4_32k is
+explicitly **BLOCKED** and is excluded from generation and runnable scheduling.
+Dry-run output reports the blocked marker, and cell execution fails closed if
+c4_32k is requested. It must not be synthesized or run.
 
 Use greedy requests (`temperature=0`, seed 0, `ignore_eos=true`) and require
 API `usage.completion_tokens=256`. This is a fixed-length decode-throughput
@@ -106,7 +127,8 @@ not per-request evidence.
 
 ## Decision rule (pre-register; not a result)
 
-Report each of the four load points independently. A k is a candidate for a
+Report each of the three runnable load points independently and retain c4_32k
+as BLOCKED. A k is a candidate for a
 point only with verified prompt-token identity and meaningful-answer correctness,
 valid identical-work waves, zero preemptions
 and Xid delta, and a repeatable >=5% median aggregate-throughput gain without

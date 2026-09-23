@@ -34,11 +34,30 @@ def valid_manifest() -> dict:
                     "token_ids": ids,
                     "token_ids_sha256": runner.token_ids_sha256(ids),
                     "expected_answer": f"answer-{point}-{slot}",
+                    "derivation": {
+                        "source_file": f"ctx{16000 if point.endswith('16k') else 80000}/{runner.TURN_FILES[slot]}",
+                        "source_file_sha256": "1" * 64,
+                        "source_token_ids_sha256": "2" * 64,
+                        "source_prompt_tokens": geometry["prompt_tokens"] - 1,
+                        "filler_count": 1,
+                        "lead_token_id": ids[0],
+                        "lead_token_text": f"lead-{slot}",
+                        "filler_token_id": 99,
+                        "source_query_span": [geometry["prompt_tokens"] - 4, geometry["prompt_tokens"] - 1],
+                        "derived_query_span": [geometry["prompt_tokens"] - 3, geometry["prompt_tokens"]],
+                        "replaced_token_0": {"from": 99, "to": ids[0]},
+                        "expected_single_recovery_code": f"answer-{point}-{slot}",
+                        "recovery_marker": f"marker-{point}-{slot}",
+                        "preserved_query_text": "archived query",
+                        "input_classification": "derived; not historical byte-identical input",
+                    },
                 }
             )
         points[point] = {**geometry, "requests": requests}
     return {
         "schema": 1,
+        "input_classification": "derived_from_archived_turns_not_historical_byte_identical",
+        "blocked_points": runner.BLOCKED_POINTS,
         "model": "qwen38-test-pack",
         "provenance": {
             "model_pack_sha256": "a" * 64,
@@ -90,16 +109,18 @@ class C2C4MatchedLoadTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.CellError, "conflict"):
             runner.parse_enginecore_startup_evidence(conflict)
 
-    def test_schedule_has_all_eight_counterbalanced_fresh_engine_cells(self) -> None:
+    def test_schedule_has_six_counterbalanced_fresh_engine_cells_and_c4_32k_blocked(self) -> None:
         schedule = runner.make_schedule()
-        self.assertEqual(len(schedule), 8)
+        self.assertEqual(len(schedule), 6)
         for point in runner.POINTS:
             pair = [cell["k"] for cell in schedule if cell["point"] == point]
             self.assertEqual(sorted(pair), [2, 3])
         self.assertEqual(
-            [cell["k"] for cell in schedule], [2, 3, 3, 2, 3, 2, 2, 3]
+            [cell["k"] for cell in schedule], [2, 3, 3, 2, 3, 2]
         )
         self.assertTrue(all(cell["fresh_engine_required"] for cell in schedule))
+        self.assertNotIn("c4_32k", [cell["point"] for cell in schedule])
+        self.assertEqual(runner.BLOCKED_POINTS["c4_32k"].split(":", 1)[0], "BLOCKED")
 
     def test_manifest_validates_exact_geometry_and_prompt_hashes(self) -> None:
         doc = valid_manifest()
@@ -181,11 +202,30 @@ class C2C4MatchedLoadTests(unittest.TestCase):
         requests[1]["token_ids_sha256"] = runner.token_ids_sha256(
             requests[1]["token_ids"]
         )
+        requests[1]["derivation"]["lead_token_id"] = requests[1]["token_ids"][0]
+        requests[1]["derivation"]["replaced_token_0"]["to"] = requests[1]["token_ids"][0]
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "prompts.json"
             path.write_text(json.dumps(doc))
             with self.assertRaisesRegex(runner.CellError, "share a 1-token prefix"):
                 runner.load_prompt_manifest(path)
+
+    def test_blocked_point_fails_closed_when_execution_is_requested(self):
+        manifest = valid_manifest()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "prompts.json"
+            path.write_text(json.dumps(manifest))
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with patch.object(sys, "argv", [str(SCRIPT), "--manifest", str(path),
+                        "--expected-r0-source-commit", "f" * 40, "--execute",
+                        "--point", "c4_32k", "--k", "2", "--runtime-proof", str(path),
+                        "--out-dir", str(Path(temp) / "out")]):
+                    self.assertEqual(runner.main(), 2)
+            self.assertIn("BLOCKED: historical 27,250-token input", stderr.getvalue())
+
+    def test_blocked_point_rejects_runtime_proof_before_startup_evidence(self):
+        with self.assertRaisesRegex(runner.CellError, "BLOCKED: historical 27,250-token input"):
+            runner.make_runtime_proof({}, "", "c4_32k", 2, {}, 2048)
 
     def test_runtime_proof_enforces_frozen_envelope_and_kv_headroom(self) -> None:
         manifest = valid_manifest()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the exact-token C2/C4 manifest from explicit local model assets."""
+"""Derive exact-length C2/C4 inputs from archived turns and freeze their IDs."""
 
 from __future__ import annotations
 
@@ -30,13 +30,8 @@ LEAD_WORDS = (
     "Iris", "Juniper", "Kestrel", "Linden", "Maple", "North", "Olive", "Prairie",
     "Quartz", "River", "Summit", "Timber", "Umber", "Valley", "Willow", "Yarrow",
 )
-PROMPT_PREFIX = (
-    "{lead} task: Read this request carefully. Ignore the neutral context. "
-    "Reply with exactly the answer code shown at the very end, with no extra text. "
-    "Neutral context:"
-)
-PROMPT_SUFFIX = " Answer code: {answer}"
 FILLER_CANDIDATES = (" neutral", " context", " ordinary", " sample")
+TURN_FILES = runner.TURN_FILES
 
 
 class ManifestError(ValueError):
@@ -109,27 +104,62 @@ def _decode(tokenizer: Any, ids: list[int]) -> str:
         raise ManifestError("Tokenizer cannot decode candidate prompt IDs") from exc
 
 
-def _make_prompt_ids(
+def derive_archived_request(
     tokenizer: Any,
-    point: str,
-    slot: int,
-    lead_word: str,
-    filler_id: int,
+    source: dict[str, Any],
+    source_file: Path,
+    source_label: str,
     target_tokens: int,
-) -> tuple[list[int], str]:
-    answer = f"r0-c2-c4-{point}-{slot}"
-    prefix = _encode(tokenizer, PROMPT_PREFIX.format(lead=lead_word))
-    suffix = _encode(tokenizer, PROMPT_SUFFIX.format(answer=answer))
-    filler_count = target_tokens - len(prefix) - len(suffix)
-    if not prefix or filler_count < 0:
-        raise ManifestError(f"Instruction and answer do not fit the {point} token budget")
-    ids = prefix + [filler_id] * filler_count + suffix
-    decoded = _decode(tokenizer, ids)
-    if not decoded.startswith(lead_word) or not decoded.endswith(answer):
-        raise ManifestError(f"Tokenizer did not preserve the {point} prompt lead/answer suffix")
-    if _encode(tokenizer, decoded) != ids:
-        raise ManifestError(f"Tokenizer failed exact token-ID round trip for {point} slot {slot}")
-    return ids, answer
+    lead_token: int,
+    filler_id: int,
+) -> tuple[list[int], str, dict[str, Any]]:
+    source_ids = source.get("prompt_token_ids")
+    query_span = source.get("query_span")
+    facts = source.get("target_facts")
+    if (not isinstance(source_ids, list) or any(type(t) is not int or t < 0 for t in source_ids)
+            or not isinstance(query_span, list) or len(query_span) != 2
+            or any(type(v) is not int for v in query_span)):
+        raise ManifestError(f"Malformed archived token IDs or query span: {source_label}")
+    query_start, query_end = query_span
+    if (source.get("prompt_tokens") != len(source_ids) or query_start < 1
+            or query_end <= query_start or query_end != len(source_ids)):
+        raise ManifestError(f"Archived prompt/query boundaries are inconsistent: {source_label}")
+    if not isinstance(facts, list) or len(facts) != 1 or not isinstance(facts[0], dict):
+        raise ManifestError(f"Expected exactly one archived recovery fact: {source_label}")
+    answer = facts[0].get("code")
+    marker = facts[0].get("marker")
+    if not isinstance(answer, str) or not answer or not isinstance(marker, str) or not marker:
+        raise ManifestError(f"Archived recovery fact is malformed: {source_label}")
+    query_ids = source_ids[query_start:query_end]
+    decoded_query = _decode(tokenizer, query_ids)
+    if decoded_query != source.get("query_text") or marker not in decoded_query:
+        raise ManifestError(f"Decoded archived query does not match its recorded text: {source_label}")
+    filler_count = target_tokens - len(source_ids)
+    if filler_count < 0:
+        raise ManifestError(f"Archived input exceeds target length: {source_label}")
+    derived = source_ids[:query_start] + [filler_id] * filler_count + query_ids
+    derived[0] = lead_token
+    decoded = _decode(tokenizer, derived)
+    if len(derived) != target_tokens or answer not in decoded or marker not in decoded:
+        raise ManifestError(f"Derived input lost its archived recovery fact/query: {source_label}")
+    return derived, answer, {
+        "source_file": source_label,
+        "source_file_sha256": _file_hash(source_file),
+        "source_token_ids_sha256": runner.token_ids_sha256(source_ids),
+        "source_prompt_tokens": len(source_ids),
+        "source_query_span": query_span,
+        "derived_query_span": [query_start + filler_count, query_start + filler_count + len(query_ids)],
+        "replaced_token_0": {"from": source_ids[0], "to": lead_token},
+        "lead_token_id": lead_token,
+        "lead_token_text": _decode(tokenizer, [lead_token]),
+        "filler_token_id": filler_id,
+        "filler_count": filler_count,
+        "insertion": "neutral filler IDs immediately before archived query span",
+        "preserved_query_text": decoded_query,
+        "recovery_marker": marker,
+        "expected_single_recovery_code": answer,
+        "input_classification": "derived; not historical byte-identical input",
+    }
 
 
 def make_manifest(args: argparse.Namespace, tokenizer_loader=_load_tokenizer) -> dict[str, Any]:
@@ -156,6 +186,8 @@ def make_manifest(args: argparse.Namespace, tokenizer_loader=_load_tokenizer) ->
             ) from exc
     config_hash = _file_hash(model_config)
 
+    source_root, source_files = _regular_tree(args.source_prompts)
+    source_by_relative = {path.relative_to(source_root).as_posix(): path for path in source_files}
     tokenizer = tokenizer_loader(args.tokenizer_path)
     vocab_size = len(tokenizer)
     special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
@@ -179,8 +211,9 @@ def make_manifest(args: argparse.Namespace, tokenizer_loader=_load_tokenizer) ->
 
     leads: list[tuple[str, int]] = []
     for word in LEAD_WORDS:
-        lead_ids = _encode(tokenizer, PROMPT_PREFIX.format(lead=word))
-        if lead_ids and lead_ids[0] in ordinary_ids and lead_ids[0] != filler_id:
+        lead_ids = _encode(tokenizer, word)
+        if (len(lead_ids) == 1 and lead_ids[0] in ordinary_ids and lead_ids[0] != filler_id
+                and _decode(tokenizer, lead_ids) == word):
             if all(lead_ids[0] != token for _, token in leads):
                 leads.append((word, lead_ids[0]))
         if len(leads) == lead_count:
@@ -192,29 +225,39 @@ def make_manifest(args: argparse.Namespace, tokenizer_loader=_load_tokenizer) ->
     lead_index = 0
     for point, geometry in runner.POINTS.items():
         requests = []
+        context = 16000 if point.endswith("16k") else 80000
         for slot in range(geometry["concurrency"]):
-            lead_word, lead_token = leads[lead_index]
+            _, lead_token = leads[lead_index]
             lead_index += 1
             if lead_token >= vocab_size or filler_id >= vocab_size:
                 raise ManifestError("Constructed token ID is outside the tokenizer vocabulary")
-            ids, answer = _make_prompt_ids(
-                tokenizer,
-                point,
-                slot,
-                lead_word,
-                filler_id,
-                geometry["prompt_tokens"],
+            source_label = f"ctx{context}/{TURN_FILES[slot]}"
+            source_path = source_by_relative.get(source_label)
+            if source_path is None:
+                raise ManifestError(f"Missing archived source turn: {source_label}")
+            try:
+                source = json.loads(source_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ManifestError(f"Cannot read archived source turn: {source_label}") from exc
+            if not isinstance(source, dict) or source.get("context_limit") != context:
+                raise ManifestError(f"Archived turn has unexpected context limit: {source_label}")
+            ids, answer, derivation = derive_archived_request(
+                tokenizer, source, source_path, source_label,
+                geometry["prompt_tokens"], lead_token, filler_id,
             )
             requests.append({
                 "slot": slot,
                 "token_ids": ids,
                 "token_ids_sha256": runner.token_ids_sha256(ids),
                 "expected_answer": answer,
+                "derivation": derivation,
             })
         points[point] = {**geometry, "requests": requests}
 
     manifest = {
         "schema": 1,
+        "input_classification": "derived_from_archived_turns_not_historical_byte_identical",
+        "blocked_points": runner.BLOCKED_POINTS,
         "model": args.model,
         "provenance": {
             "model_pack_sha256": model_pack_hash,
@@ -264,6 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--tokenizer-path", type=Path, required=True)
+    parser.add_argument("--source-prompts", type=Path, required=True,
+                        help="root containing ctx16000/ and ctx80000/ archived turn JSON files")
     parser.add_argument("--model", required=True)
     parser.add_argument("--model-revision-sha256", type=_sha_arg, required=True)
     parser.add_argument("--installed-exl3-source-sha256", type=_sha_arg, required=True)

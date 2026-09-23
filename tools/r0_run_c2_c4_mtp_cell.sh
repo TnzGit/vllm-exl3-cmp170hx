@@ -7,7 +7,8 @@ set -Eeuo pipefail
 usage() {
   cat <<'EOF'
 Usage: r0_run_c2_c4_mtp_cell.sh [--dry-run] POINT K
-POINT: c2_16k | c2_80k | c4_16k | c4_32k; K: 2 | 3
+POINT: c2_16k | c2_80k | c4_16k; K: 2 | 3
+c4_32k is BLOCKED: its exact historical 27,250-token input is not recoverable.
 Required environment: EXPECTED_SHA, R0_REPO, MODEL_DIR, MANIFEST, OUT.
 Optional: R0_ROOT (defaults to /home/base-node/.codex_tasks/qwen38-flashnext-r0),
           LAUNCH_TIMEOUT (defaults to 2400 seconds).
@@ -23,7 +24,11 @@ DRY_RUN=0
 if [[ "${1:-}" == "--dry-run" ]]; then DRY_RUN=1; shift; fi
 if (($# != 2)); then usage >&2; exit 2; fi
 POINT="$1" K="$2"
-case "$POINT" in c2_16k|c2_80k|c4_16k|c4_32k) ;; *) usage >&2; exit 2 ;; esac
+case "$POINT" in
+  c2_16k|c2_80k|c4_16k) ;;
+  c4_32k) echo 'BLOCKED: historical c4_32k input is not recoverable; refusing to synthesize or run' >&2; exit 2 ;;
+  *) usage >&2; exit 2 ;;
+esac
 [[ "$K" == 2 || "$K" == 3 ]] || { usage >&2; exit 2; }
 
 EXPECTED_SHA="${EXPECTED_SHA:?set EXPECTED_SHA to the full isolated R0_REPO commit}"

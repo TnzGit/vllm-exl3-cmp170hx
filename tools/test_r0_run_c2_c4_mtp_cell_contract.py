@@ -64,6 +64,12 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
         self.assertIn("--dry-run", self.text)
         self.assertNotIn("refusal-edit", self.text)
 
+    def test_c4_32k_is_rejected_before_runtime_environment_checks(self):
+        blocked = self.text.index("c4_32k) echo 'BLOCKED:")
+        required_env = self.text.index('EXPECTED_SHA="${EXPECTED_SHA:?')
+        self.assertLess(blocked, required_env)
+        self.assertNotIn("c4_32k; K:", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

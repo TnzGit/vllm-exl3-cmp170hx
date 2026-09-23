@@ -52,8 +52,11 @@ POINTS = {
     "c2_16k": {"concurrency": 2, "prompt_tokens": 15_533},
     "c2_80k": {"concurrency": 2, "prompt_tokens": 79_533},
     "c4_16k": {"concurrency": 4, "prompt_tokens": 15_533},
-    "c4_32k": {"concurrency": 4, "prompt_tokens": 27_250},
 }
+BLOCKED_POINTS = {
+    "c4_32k": "BLOCKED: historical 27,250-token input is not recoverable; synthetic replacement is prohibited",
+}
+TURN_FILES = ("turn_00_ask_a.json", "turn_01_ask_b.json", "turn_02_ask_a_paraphrase.json", "turn_03_ask_c.json")
 FROZEN_CONFIG = {
     "coop": True,
     "graph_mode": "PIECEWISE",
@@ -112,6 +115,8 @@ def make_runtime_proof(
     expected_budget: int,
 ) -> dict[str, Any]:
     """Build proof from pinned expectations plus EngineCore-owned log evidence."""
+    if point in BLOCKED_POINTS:
+        raise CellError(BLOCKED_POINTS[point])
     evidence = parse_enginecore_startup_evidence(log_text)
     if evidence["observed_enginecore_max_num_scheduled_tokens"] != expected_budget:
         raise CellError(
@@ -265,6 +270,10 @@ def load_prompt_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
         ):
             raise CellError(f"Frozen runtime expectation must be text: {name}")
 
+    if doc.get("input_classification") != "derived_from_archived_turns_not_historical_byte_identical":
+        raise CellError("Manifest must disclose derived inputs are not historical byte-identical inputs")
+    if doc.get("blocked_points") != BLOCKED_POINTS:
+        raise CellError("Manifest must preserve the explicit blocked c4_32k marker")
     points = doc.get("points")
     if not isinstance(points, dict) or set(points) != set(POINTS):
         raise CellError(f"Manifest points must be exactly {sorted(POINTS)}")
@@ -307,6 +316,41 @@ def load_prompt_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
             answer = request.get("expected_answer")
             if not isinstance(answer, str) or not answer.strip():
                 raise CellError(f"Missing expected answer in {point} slot {slot}")
+            derivation = request.get("derivation")
+            if not isinstance(derivation, dict):
+                raise CellError(f"Missing archived-input derivation in {point} slot {slot}")
+            for field in ("source_file_sha256", "source_token_ids_sha256"):
+                if not isinstance(derivation.get(field), str) or not PROMPT_SHA_RE.fullmatch(derivation[field]):
+                    raise CellError(f"Malformed {field} in {point} slot {slot}")
+            context = 16000 if point.endswith("16k") else 80000
+            if derivation.get("source_file") != f"ctx{context}/{TURN_FILES[slot]}":
+                raise CellError(f"Unexpected archived parent turn in {point} slot {slot}")
+            if type(derivation.get("filler_count")) is not int or derivation["filler_count"] < 0:
+                raise CellError(f"Invalid archived-input filler count in {point} slot {slot}")
+            if (type(derivation.get("source_prompt_tokens")) is not int
+                    or derivation["source_prompt_tokens"] + derivation["filler_count"]
+                    != contract["prompt_tokens"] or derivation.get("lead_token_id") != ids[0]):
+                raise CellError(f"Archived-input derivation does not match derived IDs in {point} slot {slot}")
+            replaced = derivation.get("replaced_token_0")
+            derived_query = derivation.get("derived_query_span")
+            source_query = derivation.get("source_query_span")
+            if (not isinstance(replaced, dict) or type(replaced.get("from")) is not int
+                    or replaced.get("to") != ids[0]
+                    or not isinstance(derivation.get("filler_token_id"), int)
+                    or not isinstance(derivation.get("lead_token_text"), str)
+                    or not derivation["lead_token_text"].strip()
+                    or derivation.get("expected_single_recovery_code") != answer
+                    or not isinstance(derivation.get("recovery_marker"), str)
+                    or not isinstance(derivation.get("preserved_query_text"), str)
+                    or derivation.get("input_classification") != "derived; not historical byte-identical input"
+                    or not isinstance(source_query, list) or len(source_query) != 2
+                    or not isinstance(derived_query, list) or len(derived_query) != 2
+                    or any(type(v) is not int for v in source_query + derived_query)
+                    or derived_query[1] - derived_query[0] != source_query[1] - source_query[0]
+                    or source_query[1] != derivation["source_prompt_tokens"]
+                    or derived_query[0] != source_query[0] + derivation["filler_count"]
+                    or derived_query[0] < 1 or derived_query[1] > contract["prompt_tokens"]):
+                raise CellError(f"Archived query/recovery derivation is incomplete in {point} slot {slot}")
             by_slot[slot] = ids
         if set(by_slot) != set(range(contract["concurrency"])):
             raise CellError(f"Slots are not contiguous in {point}")
@@ -326,12 +370,11 @@ def load_prompt_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
 
 
 def make_schedule() -> list[dict[str, Any]]:
-    """Counterbalance k order within each of the four fixed load points."""
+    """Counterbalance k order within the three runnable fixed load points."""
     order = (
         ("c2_16k", (2, 3)),
         ("c2_80k", (3, 2)),
         ("c4_16k", (3, 2)),
-        ("c4_32k", (2, 3)),
     )
     return [
         {
@@ -812,6 +855,8 @@ def run_cell(
     out_dir: Path,
     base: str,
 ) -> dict[str, Any]:
+    if point in BLOCKED_POINTS:
+        raise CellError(BLOCKED_POINTS[point])
     if point not in POINTS or k not in (2, 3):
         raise CellError("Point/k is outside the frozen matrix")
     validate_runtime_proof(proof, manifest, point, k)
@@ -955,6 +1000,7 @@ def _dry_run(manifest: dict[str, Any], raw: bytes) -> dict[str, Any]:
         "provenance": manifest["provenance"],
         "fixed_config": FROZEN_CONFIG,
         "schedule": make_schedule(),
+        "blocked_points": BLOCKED_POINTS,
     }
 
 
@@ -968,7 +1014,7 @@ def main() -> int:
     parser.add_argument(
         "--execute", action="store_true", help="send local API requests"
     )
-    parser.add_argument("--point", choices=sorted(POINTS))
+    parser.add_argument("--point", choices=sorted(set(POINTS) | set(BLOCKED_POINTS)))
     parser.add_argument("--k", type=int, choices=(2, 3))
     parser.add_argument("--runtime-proof", type=Path)
     parser.add_argument("--out-dir", type=Path)
@@ -994,6 +1040,8 @@ def main() -> int:
             parser.error(
                 "--execute requires --point, --k, --runtime-proof, and --out-dir"
             )
+        if args.point in BLOCKED_POINTS:
+            raise CellError(BLOCKED_POINTS[args.point])
         proof, _ = _load_json(args.runtime_proof, 1024 * 1024)
         if not isinstance(proof, dict):
             raise CellError("Runtime proof must be a JSON object")
