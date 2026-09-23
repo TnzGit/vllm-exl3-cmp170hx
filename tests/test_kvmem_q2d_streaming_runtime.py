@@ -108,6 +108,20 @@ def test_runtime_plan_allows_only_explicit_246k_benchmark_capacity():
         validate_streaming_plan(dict(plan, benchmark_only=False))
 
 
+def test_benchmark_source_contains_no_discarded_sticky_policy():
+    maker = _load_maker()
+    source = maker.benchmark_source({
+        "query_span": [239488, 239533],
+        "target_facts": [{"code": "violet-harbor-31"}],
+    })
+    assert source["physical_page_count"] == 4160
+    assert source["scheduler_chunk_tokens"] == 1024
+    assert source["query_span"] == [239488, 239533]
+    assert "resident_pages" not in source
+    plan = maker.promote(source, max_model_len=246000)
+    assert plan["cpu_page_count"] == 15375
+
+
 def test_scheduler_owns_bounded_two_chunk_write_pipeline(monkeypatch, tmp_path):
     stats = tmp_path / "scheduler.jsonl"
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2D_SCHED_STATS_PATH", str(stats))

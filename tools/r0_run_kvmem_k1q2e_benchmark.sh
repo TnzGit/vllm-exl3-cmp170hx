@@ -6,7 +6,6 @@ REPO="${R0_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ROOT="${R0_ROOT:-$HOME/.codex_tasks/qwen38-flashnext-r0}"
 VENV="${R0_VENV:-$ROOT/venv}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw}"
-K1B_DIR="${K1B_DIR:-$ROOT/results/kvmem-k1b-sticky}"
 OUT="${1:-$ROOT/results/kvmem-k1q2e-benchmark}"
 EXPECTED_SHA="${EXPECTED_SHA:?set EXPECTED_SHA to the exact benchmark head}"
 PORT="${PORT:-8002}"
@@ -120,7 +119,6 @@ guard_idle() {
 
 echo "=== provenance and idle guard ==="
 test -f "$QSA"
-test -f "$K1B_DIR/k1b_sticky_summary.json"
 if curl -s -m 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
   echo "REFUSE: port $PORT is already serving" >&2
   exit 2
@@ -172,19 +170,10 @@ echo "=== exact-token cases and benchmark-only plan ==="
 "$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_turns.py" \
   --model-dir "$MODEL_DIR" --out-dir "$OUT/turns" \
   --contexts 4096 "${CONTEXTS[@]}"
-"$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_cpu_backed_plan.py" \
-  --k1b-summary "$K1B_DIR/k1b_sticky_summary.json" \
-  --turn-file "$OUT/turns/ctx240000/turn_04_ask_d_e.json" \
-  --context 240000 --turn ask_d_e --page-tokens 16 \
-  --active-reserve-tokens 1024 --publication-staging-pages 128 \
-  --out "$OUT/q2b_source_plan.json" > "$OUT/q2b_source_plan.stdout.json"
-PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
-  "$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_q2c_runtime_plan.py" \
-  --q2b-plan "$OUT/q2b_source_plan.json" --out "$OUT/q2c_source_plan.json" \
-  > "$OUT/q2c_source_plan.stdout.json"
 PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}" \
   "$VENV/bin/python" "$REPO/tools/kvmem_qsa_make_q2d_runtime_plan.py" \
-  --q2c-plan "$OUT/q2c_source_plan.json" --max-model-len "$MAX_MODEL_LEN" \
+  --benchmark-case "$OUT/turns/ctx240000/turn_04_ask_d_e.json" \
+  --max-model-len "$MAX_MODEL_LEN" \
   --out "$PLAN" > "$OUT/q2e_benchmark_plan.stdout.json"
 
 XID_BEFORE="$(xid_now)"; XID_BEFORE="${XID_BEFORE:-0}"

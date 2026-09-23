@@ -11,6 +11,20 @@ from pathlib import Path
 from vllm_exl3.kvmem_q2d_scheduler_runtime import validate_streaming_plan
 
 
+def benchmark_source(case: dict) -> dict:
+    """Build only the source fields Q2D needs; no discarded sticky policy."""
+    return {
+        "schema": 1,
+        "mode": "qsa_scheduler_owned_transition",
+        "page_tokens": 16,
+        "physical_page_count": 4160,
+        "scheduler_chunk_tokens": 1024,
+        "query_span": [int(value) for value in case["query_span"]],
+        "target_facts": list(case.get("target_facts", [])),
+        "expected_qsa_layers": 12,
+    }
+
+
 def promote(q2c: dict, *, max_model_len: int = 161000) -> dict:
     if q2c.get("mode") != "qsa_scheduler_owned_transition":
         raise ValueError("expected Q2C scheduler-owned plan")
@@ -49,12 +63,20 @@ def promote(q2c: dict, *, max_model_len: int = 161000) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--q2c-plan", type=Path, required=True)
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--q2c-plan", type=Path)
+    source.add_argument("--benchmark-case", type=Path)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--max-model-len", type=int, default=161000)
     args = ap.parse_args()
+    if args.benchmark_case is not None:
+        if args.max_model_len != 246000:
+            raise ValueError("benchmark case requires max_model_len=246000")
+        q2c = benchmark_source(json.loads(args.benchmark_case.read_text()))
+    else:
+        q2c = json.loads(args.q2c_plan.read_text())
     result = promote(
-        json.loads(args.q2c_plan.read_text()),
+        q2c,
         max_model_len=args.max_model_len,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
