@@ -88,6 +88,12 @@ ARGS=(
   --compilation-config "$COMPILATION_CONFIG"
 )
 
+# Optional explicit prefill/decode scheduling budget. An empty value retains
+# vLLM's installed default, so existing launch profiles are unchanged.
+if [[ -n "${MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+  ARGS+=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")
+fi
+
 # NUM_SPEC_TOKENS=0 keeps the no-draft profile; any other value enables the
 # Qwen4Exp MTP draft. Requires the text-mtp patch stack. Prefix caching stays
 # off for every MTP cell so the open hybrid/MTP cache issues are not a confound.
@@ -129,6 +135,7 @@ printf '  %-28s %s\n' \
   "GPU_MEM_UTIL" "$GPU_MEM_UTIL" \
   "MAX_MODEL_LEN" "$MAX_MODEL_LEN" \
   "MAX_NUM_SEQS" "$MAX_NUM_SEQS" \
+  "MAX_NUM_BATCHED_TOKENS" "${MAX_NUM_BATCHED_TOKENS:-<default>}" \
   "PORT" "$PORT" \
   "NUM_SPEC_TOKENS" "$NUM_SPEC_TOKENS" \
   "VLLM_EXL3_MODEL_DIR" "$VLLM_EXL3_MODEL_DIR" \
