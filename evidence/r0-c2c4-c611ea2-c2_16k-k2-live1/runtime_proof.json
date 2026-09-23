@@ -1,0 +1,50 @@
+{
+  "config": {
+    "coop": true,
+    "disk_ngram": true,
+    "effective_max_num_batched_tokens": 2048,
+    "gpu_memory_utilization": 0.92,
+    "graph_mode": "PIECEWISE",
+    "max_model_len": 240000,
+    "max_num_batched_tokens": "auto",
+    "max_num_seqs": 4,
+    "prefix_caching": false,
+    "profiler": false,
+    "text_only": true
+  },
+  "cuda_version": "13.0",
+  "driver_version": "610.43.02",
+  "effective_budget_evidence": {
+    "batched_token_cli_arg_absent": true,
+    "engine_args_default_none_verified": true,
+    "interpretation": "inferred from the vLLM 0.29.0 defaulting code and EngineCore warning; not directly logged as max_num_batched_tokens",
+    "kind": "vllm_0.29.0_enginecore_source_inference",
+    "kv_pool_log_lines": [
+      "(EngineCore pid=542254) INFO 09-23 22:55:33 [kv_cache_utils.py:2032] GPU KV cache size: 272,392 tokens, Maximum concurrency for 240,000 tokens per request: 1.13x"
+    ],
+    "log_line_count": 1,
+    "log_line_source": "EngineCore",
+    "observed_enginecore_kv_pool_tokens": 272392,
+    "observed_enginecore_max_num_scheduled_tokens": 2048,
+    "scheduled_token_cli_arg_absent": true,
+    "scheduled_tokens_log_line": "(EngineCore pid=542254) WARNING 09-23 22:55:00 [vllm.py:1924] max_num_scheduled_tokens is set to 2048 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.",
+    "scheduler_override_absent": true,
+    "source_default_relation": "max_num_scheduled_tokens=None -> max_num_batched_tokens",
+    "source_url": "https://github.com/vllm-project/vllm/blob/v0.29.0/vllm/config/vllm.py"
+  },
+  "engine_id": "pid-542099-pgid-542099-1790175345897804144",
+  "exllamav3_revision": "0740edc2da569fb99174023c1d2988b1e98cb41e",
+  "installed_exl3_source_sha256": "dc7d3dd16a39aed839f04f68b1ee30ce2cf186b5e206c847273964f809347aba",
+  "installed_vllm_arg_utils_source_sha256": "950cb3b650c081d6d36d43d73e3ecd669b44eabd4fe8395b92e399c7a89b8011",
+  "installed_vllm_config_source_sha256": "788430b9211a5b0ccda0be565ad2a0f27e9069370f35d2b1f6a333a6ca135186",
+  "kv_pool_tokens": 272392,
+  "model": "/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw",
+  "model_config_sha256": "a3ce61dd00c9edf7d7e8e645c55fcdda9c120289270bed2ad68d031eb312c117",
+  "model_pack_sha256": "5914768b619464b6d9d7262c0f5395a2ea3e93e19677f2c7ac97d830afab5936",
+  "model_revision_sha256": "37d098b99467c756094e2a9f089a7a92b119506daee77ad692767f8236b570ca",
+  "num_speculative_tokens": 2,
+  "r0_source_commit": "c611ea24bd5d395393f238e5821e4579eadf1fa2",
+  "tokenizer_sha256": "cf5af24b6d0fa88d0667c4561f8c185be99c3509bfe82f4972d5fe940a3095e5",
+  "torch_version": "2.13.0+cu130",
+  "vllm_version": "0.29.0"
+}

@@ -1,0 +1,4 @@
+timestamp_utc=2026-09-23T14:55:45Z
+NVIDIA CMP 170HX, GPU-104453d8-5b11-c2ac-f6cd-23583b2eb39b, 610.43.02, 65536 MiB, 59690 MiB, 5222 MiB, 0 %
+compute_processes:
+542254, VLLM::EngineCore, 59664 MiB

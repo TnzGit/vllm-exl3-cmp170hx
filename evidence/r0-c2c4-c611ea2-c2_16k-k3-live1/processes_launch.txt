@@ -1,0 +1,4 @@
+timestamp_utc=2026-09-23T15:02:09Z
+    PID    PPID    PGID                  STARTED COMMAND
+ 543521  543469  543521 Wed Sep 23 23:02:08 2026 bash /home/base-node/r0-c2c4-2f73f4f/tools/serve_cmp170hx_qwen_firstboot.sh
+ 543527  543521  543521 Wed Sep 23 23:02:08 2026 python /home/base-node/r0-c2c4-2f73f4f/tools/cmp170hx_qwen_preflight.py --profile text-no-draft

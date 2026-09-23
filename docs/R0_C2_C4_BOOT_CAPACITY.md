@@ -83,3 +83,32 @@ Evidence: [`evidence/r0-c2c4-67bc16f-c2_16k-k2-live1/`](../evidence/r0-c2c4-67bc
 Frozen manifest SHA-256:
 `43d983a7a074293d16065bde8a572aa4839205ae9d8f8150996292f9541c6ef5`.
 No performance result is available from either attempt summarized here.
+
+## Matched default-graph attempts at `c611ea2`
+
+The corrected runner used the same fixed 240K manifest
+(`27487834307b69f25c57c8421f1545100a451184c293fbd717d8a19027e6e555`)
+for both k values, with `.92` memory utilization, `max_num_seqs=4`, and the
+default PIECEWISE capture list. The k=2 C2/16K cell passed startup proof,
+ten valid measured waves, semantic checks, and cleanup: median aggregate
+output **20.45 tok/s**, median TTFT **14.55 s**, median TPOT **36.73 ms**,
+0 preemptions, 0 discarded waves, 0 Xid delta, GPU 14 MiB afterward, and
+port 8002 closed. Its startup log and proof agree on a **272,392-token** KV
+pool. This is aggregate request throughput including prefill, not pure decode
+speed. Evidence: [`evidence/r0-c2c4-c611ea2-c2_16k-k2-live1/`](../evidence/r0-c2c4-c611ea2-c2_16k-k2-live1/).
+
+The matched k=3 C2/16K cell failed **before `/health` and before requests**:
+EngineCore required 6.83 GiB KV for 240,000 tokens, had 6.79 GiB available,
+and estimated a 238,400-token maximum. Its earlier log line rounded
+available KV to 6.83 GiB; the exception's 6.79 GiB is the final admission
+value. This is a k=3 **boot-capacity NO-GO under the default graph profile**,
+not a runtime performance or correctness measurement. Xid remained 0, GPU
+returned to 14 MiB with no compute process, and port 8002 closed. Evidence:
+[`evidence/r0-c2c4-c611ea2-c2_16k-k3-live1/`](../evidence/r0-c2c4-c611ea2-c2_16k-k3-live1/).
+
+The two startup KV pools differ materially; a pool measured in a different
+engine cannot be substituted for k=3's failed admission. There is no valid
+matched k=2/k=3 speed comparison yet. A smaller fixed graph-capture list
+would constitute a further protocol revision and require both k values to
+be rerun under the same exact configuration; these default-graph results
+must not be pooled with such a revision.

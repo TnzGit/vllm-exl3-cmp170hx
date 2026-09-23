@@ -1,0 +1,2 @@
+xid_count_after=0
+xid_delta=0

@@ -1,0 +1,10 @@
+{
+  "manifest_sha256": "27487834307b69f25c57c8421f1545100a451184c293fbd717d8a19027e6e555",
+  "model_bytes_hashed": 72400911759,
+  "model_config_sha256": "a3ce61dd00c9edf7d7e8e645c55fcdda9c120289270bed2ad68d031eb312c117",
+  "model_file_count": 26,
+  "model_tree_sha256": "5914768b619464b6d9d7262c0f5395a2ea3e93e19677f2c7ac97d830afab5936",
+  "tokenizer_bytes_hashed": 22912218,
+  "tokenizer_file_count": 5,
+  "tokenizer_tree_sha256": "cf5af24b6d0fa88d0667c4561f8c185be99c3509bfe82f4972d5fe940a3095e5"
+}
