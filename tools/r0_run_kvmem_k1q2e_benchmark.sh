@@ -209,7 +209,8 @@ echo "=== unmeasured 4K warmup ==="
 : > "$WORKER_STATS"; : > "$SCHED_STATS"
 "$VENV/bin/python" "$REPO/tools/kvmem_q2e_benchmark_client.py" \
   --port "$PORT" --case "$OUT/turns/ctx4096/turn_04_ask_d_e.json" \
-  --max-tokens 16 --out "$OUT/warmup.json" >/dev/null
+  --max-tokens 16 --allow-semantic-failure \
+  --out "$OUT/warmup.json" >/dev/null
 guard_idle
 
 echo "=== measured cells ==="

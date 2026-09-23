@@ -18,6 +18,7 @@ def test_benchmark_runner_freezes_performance_contract_and_restores_qsa():
     assert "unset VLLM_QWEN_KVMEM_Q2E_TRACE_PATH" in source
     assert "--benchmark-case" in source
     assert "k1b_sticky_summary" not in source
+    assert "--max-tokens 16 --allow-semantic-failure" in source
     assert "EXPECTED_SHA" in source
     assert "restore_qsa" in source
     assert "xid_now" in source
