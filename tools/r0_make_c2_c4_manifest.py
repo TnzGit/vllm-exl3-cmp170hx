@@ -26,6 +26,8 @@ TOKENIZER_FILES = {
     "vocab.txt", "merges.txt", "chat_template.jinja",
 }
 LEAD_WORDS = (
+    "Hello", "The", "This", "First", "Second", "One", "Two", "Three",
+    "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Here",
     "Amber", "Birch", "Cedar", "Dahlia", "Elm", "Flint", "Grove", "Harbor",
     "Iris", "Juniper", "Kestrel", "Linden", "Maple", "North", "Olive", "Prairie",
     "Quartz", "River", "Summit", "Timber", "Umber", "Valley", "Willow", "Yarrow",
