@@ -201,14 +201,14 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-for cmd in nvidia-smi curl setsid ss journalctl sha256sum git rg grep; do command -v "$cmd" >/dev/null 2>&1 || die "required command missing: $cmd"; done
+for cmd in nvidia-smi curl setsid ss journalctl sha256sum git grep; do command -v "$cmd" >/dev/null 2>&1 || die "required command missing: $cmd"; done
 ACTUAL_SHA="$(git -C "$R0_REPO" rev-parse HEAD 2>/dev/null)" || die 'R0_REPO is not a git checkout'
 [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || die "R0_REPO HEAD $ACTUAL_SHA != EXPECTED_SHA $EXPECTED_SHA"
 [[ -z "$(git -C "$R0_REPO" status --porcelain=v1 --untracked-files=all)" ]] || die 'R0_REPO is dirty'
 [[ "$(git -C "$R0_REPO" rev-parse --show-toplevel)" == "$(cd "$R0_REPO" && pwd)" ]] || die 'R0_REPO path is not its Git root'
 [[ -f "$R0_REPO/tools/serve_cmp170hx_qwen_firstboot.sh" ]] || die 'expected launcher missing'
 [[ -f "$R0_REPO/src/vllm_exl3/exl3.py" ]] || die 'repo EXL3 source missing'
-if rg -n -- '--max-num-scheduled-tokens|MAX_NUM_SCHEDULED_TOKENS' "$LAUNCHER" >/dev/null; then
+if grep -nE -- '--max-num-scheduled-tokens|MAX_NUM_SCHEDULED_TOKENS' "$LAUNCHER" >/dev/null; then
   die 'launcher contains a scheduled-token override; source inference is invalid'
 fi
 INSTALLED_PLUGIN="$VENV/lib/python3.12/site-packages/vllm_exl3/exl3.py"

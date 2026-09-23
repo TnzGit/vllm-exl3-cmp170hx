@@ -70,6 +70,11 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
         self.assertLess(blocked, required_env)
         self.assertNotIn("c4_32k; K:", self.text)
 
+    def test_remote_runner_does_not_require_ripgrep(self):
+        self.assertIn("for cmd in nvidia-smi curl setsid ss journalctl sha256sum git grep", self.text)
+        self.assertIn("grep -nE -- '--max-num-scheduled-tokens|MAX_NUM_SCHEDULED_TOKENS'", self.text)
+        self.assertNotIn("command -v rg", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
