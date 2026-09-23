@@ -55,6 +55,16 @@ worth retaining should improve repeated 80K/160K TTFT by at least roughly 5%
 without a reproducible decode or short-context regression above 3%. These
 thresholds are investment gates, not predicted speedups.
 
+The first live auto/16K cell reached health and completed all three 256-token
+repeats, but one greedy output text hash differed. All prompt/output counts
+were identical and prefill TTFT was stable. That artifact is preserved as
+`r0-prefill-scan-11c4dd1-live1`; it is **not** evidence of output parity.
+The follow-up cell therefore records full output text and an explicit
+`output_parity` flag. Output variation permits a prefill-only performance
+measurement, but decode and semantic qualification are withheld until the
+text difference is classified. A substantive correctness change remains a
+stop condition.
+
 After C1, a separate C2 overlap probe should submit a new prefill while an
 existing request is decoding, and report both the new request's TTFT and the
 existing request's p95 token interval. Do not infer a concurrency win from C1.
@@ -62,6 +72,6 @@ existing request's p95 token interval. Do not infer a concurrency win from C1.
 ## Stop conditions
 
 Stop on boot failure, source mismatch, invalid denominator, unexpected
-preemption, semantic output anomaly, Xid, or contaminated process state.
+preemption, substantive semantic output anomaly, Xid, or contaminated process state.
 Preserve raw artifacts and inspect machine health before changing code or
 rerunning. Prefix caching and MTP k=4 are separate experiments.

@@ -386,6 +386,20 @@ for candidate in "${CANDIDATES[@]}"; do
     event "CELL_DONE config=$config context=$context"
   done
 
+  event "SENTINEL_START config=$config context=15533"
+  if python "$R0_REPO/tools/r0_prefill_scan_cell.py" \
+    --port "$PORT" --context 15533 --max-tokens "$MAXTOK" \
+    --repeats 1 --prompt-token-ids "$OUT/prompt_cases/prompt_15533.json" \
+    --out "$config_dir/cell_15533_sentinel.json" \
+    > "$config_dir/cell_15533_sentinel.stdout.log" 2>&1; then
+    event "SENTINEL_DONE config=$config context=15533"
+  else
+    sentinel_rc=$?
+    event "SENTINEL_FAILED config=$config status=$sentinel_rc"
+    stop_owned_process
+    die "sentinel failed for MAX_NUM_BATCHED_TOKENS=$config; artifacts retained"
+  fi
+
   curl -fsS --max-time 10 "http://$HOST:$PORT/metrics" > "$config_dir/metrics_final.prom" || true
   XID_CONFIG_AFTER="$(xid_count)"
   printf 'xid_count_after=%s\nxid_delta=%s\n' "$XID_CONFIG_AFTER" \

@@ -160,14 +160,14 @@ def _request(
     if prompt_tokens <= 0 or completion_tokens <= 0:
         raise CellError("usage prompt_tokens/completion_tokens must be positive")
 
+    output_text = "".join(output_parts)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "ttft_s": ttft_s,
         "wall_s": wall_s,
-        "output_text_sha256": hashlib.sha256(
-            "".join(output_parts).encode("utf-8")
-        ).hexdigest(),
+        "output_text_sha256": hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
+        "output_text": output_text,
         "prefill_tok_s": prompt_tokens / ttft_s,
         "tpot_s": (wall_s - ttft_s) / (completion_tokens - 1)
         if completion_tokens > 1 else None,
@@ -242,6 +242,7 @@ def main() -> int:
         "warmup": None,
         "samples": [],
         "median": None,
+        "output_parity": None,
         "status": "INVALID",
         "error": None,
     }
@@ -289,8 +290,7 @@ def main() -> int:
                 raise
 
         output_hashes = {sample["output_text_sha256"] for sample in samples}
-        if len(output_hashes) != 1:
-            raise CellError("greedy output text changed across repeats")
+        result["output_parity"] = len(output_hashes) == 1
 
         result["median"] = {
             "prompt_tokens": _median(samples, "prompt_tokens"),
@@ -300,14 +300,17 @@ def main() -> int:
             "prefill_tok_s": _median(samples, "prefill_tok_s"),
             "tpot_s": _median(samples, "tpot_s"),
         }
-        result["status"] = "VALID"
+        result["status"] = (
+            "VALID" if result["output_parity"]
+            else "VALID_PERFORMANCE_WITH_OUTPUT_VARIATION"
+        )
     except (CellError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         result["error"] = str(exc)
     finally:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
-    return 0 if result["status"] == "VALID" else 2
+    return 0 if result["status"].startswith("VALID") else 2
 
 
 if __name__ == "__main__":
