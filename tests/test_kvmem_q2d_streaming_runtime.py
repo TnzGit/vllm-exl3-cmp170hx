@@ -85,7 +85,7 @@ def _manager():
     return spec, manager
 
 
-def test_graph_probe_skips_only_uncaptured_synthetic_padding(monkeypatch):
+def test_graph_probe_skips_synthetic_padding_in_both_runtime_modes(monkeypatch):
     from vllm.config import CUDAGraphMode
     import vllm.forward_context as forward_context
 
@@ -100,7 +100,7 @@ def test_graph_probe_skips_only_uncaptured_synthetic_padding(monkeypatch):
     assert not _skip_synthetic_graph_forward(query)
     context.is_padding = torch.tensor([True, True])
     context.cudagraph_runtime_mode = CUDAGraphMode.PIECEWISE
-    assert not _skip_synthetic_graph_forward(query)
+    assert _skip_synthetic_graph_forward(query)
 
 
 def test_runtime_plan_freezes_partition_and_cpu_capacity():

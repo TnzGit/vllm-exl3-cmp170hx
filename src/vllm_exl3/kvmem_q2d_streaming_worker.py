@@ -594,17 +594,14 @@ def _stage_history(
 
 
 def _skip_synthetic_graph_forward(query: torch.Tensor) -> bool:
-    from vllm.config import CUDAGraphMode
     from vllm.forward_context import get_forward_context
 
     if query.is_cuda and torch.cuda.is_current_stream_capturing():
         return True
-    context = get_forward_context()
-    # vLLM's capture warmup runs with NONE and all rows marked as padding.
-    # Real PIECEWISE decode must not pay for a device-to-host padding check.
-    if context.cudagraph_runtime_mode != CUDAGraphMode.NONE:
-        return False
-    padding = context.is_padding
+    # vLLM invokes synthetic PIECEWISE forwards both before and during CUDA
+    # capture, so the padding check is required even when the stream is not
+    # currently capturing.
+    padding = get_forward_context().is_padding
     return padding is not None and bool(torch.all(padding).item())
 
 
