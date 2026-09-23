@@ -133,6 +133,52 @@ def test_partial_victim_selection_matches_stable_full_sort():
             )
 
 
+def test_partial_victim_selection_replays_stable_lru_events():
+    def reference_assign(state, pages):
+        missing = [page for page in pages if page not in state["logical_to_slot"]]
+        free = [
+            slot for slot, logical in enumerate(state["slot_to_logical"])
+            if logical is None
+        ][:len(missing)]
+        need = max(0, len(missing) - len(free))
+        candidates = [
+            page for page in state["logical_to_slot"] if page not in pages
+        ]
+        victims = sorted(
+            candidates, key=lambda page: state["last_use_array"][page]
+        )[:need]
+        available = list(free)
+        for victim in victims:
+            slot = state["logical_to_slot"].pop(victim)
+            state["last_use_array"][victim] = -1
+            state["slot_to_logical"][slot] = None
+            available.append(slot)
+        for page, slot in zip(missing, available, strict=True):
+            state["logical_to_slot"][page] = slot
+            state["slot_to_logical"][slot] = page
+        state["peak_slots"] = max(state["peak_slots"], len(state["logical_to_slot"]))
+        return [state["logical_to_slot"][page] for page in pages]
+
+    rng = np.random.default_rng(424)
+    actual = _lru_state(64)
+    actual["last_use_array"] = np.full(256, -1, dtype=np.int64)
+    expected = _lru_state(64)
+    expected["last_use_array"] = np.full(256, -1, dtype=np.int64)
+    for _ in range(500):
+        pages = sorted(
+            int(page) for page in rng.choice(256, size=int(rng.integers(1, 25)), replace=False)
+        )
+        assert _assign_many(actual, pages, set(pages)) == reference_assign(
+            expected, pages
+        )
+        _touch(actual, pages)
+        _touch(expected, pages)
+        assert actual["logical_to_slot"] == expected["logical_to_slot"]
+        assert actual["slot_to_logical"] == expected["slot_to_logical"]
+        assert actual["clock"] == expected["clock"]
+        assert np.array_equal(actual["last_use_array"], expected["last_use_array"])
+
+
 def test_array_lru_rejects_range_and_clock_overflow_and_preserves_duplicates():
     state = _lru_state(2)
     state["last_use_array"] = np.full(4, -1, dtype=np.int64)
