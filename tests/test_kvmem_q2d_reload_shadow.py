@@ -108,6 +108,31 @@ def test_array_lru_matches_stable_dict_ties_and_touch_order():
     assert _assign_many(tied, [22], {22}) == [0]
 
 
+def test_partial_victim_selection_matches_stable_full_sort():
+    rng = np.random.default_rng(423)
+    for capacity in (4, 31, 4032):
+        for missing_count in (1, 2, min(23, capacity - 1)):
+            resident = [int(page) for page in rng.permutation(capacity)]
+            timestamps = np.full(capacity + missing_count, -1, dtype=np.int64)
+            timestamps[:capacity] = rng.integers(0, 9, size=capacity)
+            state = _lru_state(capacity)
+            state["logical_to_slot"] = {
+                page: slot for slot, page in enumerate(resident)
+            }
+            state["slot_to_logical"] = list(resident)
+            state["last_use_array"] = timestamps
+            protected = set(resident[:1])
+            candidates = [page for page in resident if page not in protected]
+            victims = sorted(candidates, key=lambda page: timestamps[page])[
+                :missing_count
+            ]
+            expected_slots = [state["logical_to_slot"][page] for page in victims]
+            new_pages = list(range(capacity, capacity + missing_count))
+            assert _assign_many(state, new_pages, protected | set(new_pages)) == (
+                expected_slots
+            )
+
+
 def test_array_lru_rejects_range_and_clock_overflow_and_preserves_duplicates():
     state = _lru_state(2)
     state["last_use_array"] = np.full(4, -1, dtype=np.int64)

@@ -182,11 +182,22 @@ def _assign_many(
             candidate_times = last_use_array[candidate_pages]
             if bool(np.any(candidate_times < 0)):
                 raise RuntimeError("Q2D resident page has no LRU timestamp")
-            # The second key preserves Python dict insertion order for the
-            # defensive equal-timestamp case, matching stable sorted().
-            insertion_order = np.arange(len(candidates), dtype=np.int64)
-            order = np.lexsort((insertion_order, candidate_times))
-            victims = candidate_pages[order[:need_victims]].tolist()
+            if need_victims < len(candidates):
+                # Select only the required oldest pages. For equal timestamps,
+                # retain dict insertion order at the cutoff, matching the
+                # stable full-sort contract exactly.
+                cutoff = np.partition(candidate_times, need_victims - 1)[
+                    need_victims - 1
+                ]
+                older = np.flatnonzero(candidate_times < cutoff)
+                tied = np.flatnonzero(candidate_times == cutoff)[
+                    : need_victims - len(older)
+                ]
+                selected = np.concatenate((older, tied))
+            else:
+                selected = np.arange(len(candidates), dtype=np.int64)
+            order = np.lexsort((selected, candidate_times[selected]))
+            victims = candidate_pages[selected[order]].tolist()
         elif need_victims < len(candidates):
             victims = heapq.nsmallest(
                 need_victims,
