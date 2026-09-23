@@ -125,3 +125,18 @@ Every cell under this revision needs a fresh engine and a new exact source SHA;
 none of the earlier default-graph results counts as a matched speed result.
 If k=3 still fails admission, retain the boot NO-GO and stop rather than
 altering another memory parameter.
+
+The first matched pair at exact source `a059704a2fd01f9419174b446862bfadc47b9e92`
+now passes under this revision. Both EngineCore logs and runtime proofs show
+the six-size list. C2/16K k=2 had a 247,361-token KV pool and median aggregate
+output 20.2705 tok/s; k=3 had a 268,742-token pool and 20.0135 tok/s.
+Each had 10 valid measured waves, zero discarded waves, zero preemptions,
+positive concurrent decode overlap in every wave, complete semantic gates,
+Xid delta zero, 14 MiB post-run GPU usage, and closed port 8002. The k=3
+aggregate median is about 1.3% lower than k=2, with p95 TTFT/TPOT about
+0.4%/0.6% higher; no preregistered >=5% improvement is established at this
+load point. These are full request aggregate throughput numbers, not pure
+decode tokens per second. Evidence:
+[`k=2`](../evidence/r0-c2c4-a059704-c2_16k-k2-live1/),
+[`k=3`](../evidence/r0-c2c4-a059704-c2_16k-k3-live1/).
+The C2/80K and C4/16K cells remain to be qualified separately.
