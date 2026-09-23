@@ -45,12 +45,11 @@ References: [`R0_MTP_K3_PRODUCTION.md`](R0_MTP_K3_PRODUCTION.md),
 
 ## Selected prospective protocol revision
 
-The user has selected **`max_model_len=240000` with the default PIECEWISE
-capture sizes** as the prospective final benchmark configuration. Preserve
+The user selected **`max_model_len=240000` with the default PIECEWISE
+capture sizes** as the final benchmark configuration. Preserve
 `gpu_memory_utilization=0.92` and `max_num_seqs=4`; retain the runtime's default
 effective capture list rather than changing it. This selection updates the
-prospective protocol only. It has **not been booted or benchmarked**, and does
-not change the factual 246000 boot-capacity NO-GO above.
+protocol only and does not change the factual 246000 boot-capacity NO-GO above.
 
 The explicit PIECEWISE capture-size set `[1,2,4,8,16,24]` is deferred and
 unrun; it is not part of the selected configuration. If reconsidered later,
@@ -61,7 +60,26 @@ port state. Keep graph-memory profiling/accounting enabled: setting
 `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0` changes the accounting basis and
 is not an accepted way to claim real graph-memory reduction.
 
-For the selected 240000 configuration, preserve the same startup and cleanup
-evidence. A failed boot remains NO-GO with no requests; any request cell must
-pass the applicable capacity/admission gate. No performance result is
-available from the evidence summarized here.
+## First 240K startup attempt at `67bc16f`
+
+With the default nine PIECEWISE graph sizes, `max_model_len=240000`, `.92`
+memory utilization and `max_num_seqs=4`, EngineCore reported **6.78 GiB**
+available KV memory and a **242,944-token** GPU KV pool. The API reached
+`/health` and `/v1/models`; the original 246K sizing failure did not recur.
+This establishes startup admission for the 240K service envelope, not
+concurrent-request correctness or throughput. The available pool clears the
+largest scheduled C2 live-set plus the preregistered 20% headroom criterion;
+the per-cell runtime proof still needs to validate that gate.
+
+The runner then rejected the live API process before building its startup
+proof or sending a request. Its identity check expected `vllm` as argv[0],
+whereas the installed entrypoint runs as `python /venv/bin/vllm serve`.
+Classification: **runner-gate false refusal; runtime cell unmeasured**. The
+owned server group was stopped, Xid stayed 0, GPU returned to 14 MiB with
+no compute process, and port 8002 closed. A subsequent exact-SHA revision
+must correct only this process-identity gate and repeat the full cell.
+
+Evidence: [`evidence/r0-c2c4-67bc16f-c2_16k-k2-live1/`](../evidence/r0-c2c4-67bc16f-c2_16k-k2-live1/).
+Frozen manifest SHA-256:
+`43d983a7a074293d16065bde8a572aa4839205ae9d8f8150996292f9541c6ef5`.
+No performance result is available from either attempt summarized here.

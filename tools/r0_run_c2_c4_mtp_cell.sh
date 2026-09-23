@@ -291,12 +291,16 @@ gpu_snapshot "$OUT/gpu_healthy.csv"
 # Confirm the actual exec arguments, not merely launcher environment. In this
 # launch profile the scheduled-token option must be absent and batched tokens
 # must remain on the launcher default (auto).
-"$VENV/bin/python" - "$ACTIVE_PID" "$K" <<'PY'
+"$VENV/bin/python" - "$ACTIVE_PID" "$K" "$VENV/bin/vllm" <<'PY'
 import json,pathlib,sys
 raw=pathlib.Path(f"/proc/{sys.argv[1]}/cmdline").read_bytes()
 args=[x.decode(errors="replace") for x in raw.split(b"\0") if x]
-if not args or "vllm" not in pathlib.Path(args[0]).name:
-    raise SystemExit(f"BLOCKED: owned PID is not the vLLM exec: {args[:4]}")
+expected_cli=pathlib.Path(sys.argv[3]).resolve()
+if (len(args) < 3
+        or pathlib.Path(args[0]).resolve() != pathlib.Path(sys.executable).resolve()
+        or pathlib.Path(args[1]).resolve() != expected_cli
+        or args[2] != "serve"):
+    raise SystemExit(f"BLOCKED: owned PID is not the expected vLLM serve exec: {args[:4]}")
 for forbidden in ("--max-num-scheduled-tokens", "--max-num-batched-tokens", "--config"):
     if forbidden in args: raise SystemExit(f"BLOCKED: unexpected explicit CLI option {forbidden}")
 if "--max-num-seqs" not in args or args[args.index("--max-num-seqs")+1] != "4":

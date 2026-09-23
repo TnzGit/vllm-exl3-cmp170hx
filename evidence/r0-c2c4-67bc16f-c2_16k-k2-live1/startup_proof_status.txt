@@ -1,0 +1,2 @@
+status=STARTUP_PROOF_INCOMPLETE
+reason=EngineCore startup evidence not yet verified

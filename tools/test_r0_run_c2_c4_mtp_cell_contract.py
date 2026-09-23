@@ -40,6 +40,12 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
         self.assertIn("source_default_relation", helper)
         self.assertIn("EngineCore", self.text)
 
+    def test_live_process_identity_handles_pinned_python_entrypoint(self):
+        self.assertIn('"$ACTIVE_PID" "$K" "$VENV/bin/vllm"', self.text)
+        self.assertIn('pathlib.Path(args[0]).resolve() != pathlib.Path(sys.executable).resolve()', self.text)
+        self.assertIn('pathlib.Path(args[1]).resolve() != expected_cli', self.text)
+        self.assertIn('args[2] != "serve"', self.text)
+
     def test_process_ownership_and_cleanup_are_narrow(self):
         self.assertIn("setsid bash \"$LAUNCHER\"", self.text)
         self.assertIn('kill -TERM -- "-$ACTIVE_PGID"', self.text)
