@@ -42,11 +42,20 @@ def validate_streaming_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "scheduler_chunk_tokens": 1024,
         "query_row_batch": 64,
         "staging_pages": 128,
-        "max_model_len": 161000,
     }
     for field, expected in frozen.items():
         if int(plan.get(field, 0)) != expected:
             raise ValueError(f"Q2D runtime {field} must equal {expected}")
+    max_model_len = int(plan.get("max_model_len", 0))
+    benchmark_only = plan.get("benchmark_only") is True
+    if max_model_len == 161000:
+        if benchmark_only:
+            raise ValueError("Q2D qualified 161K plan cannot be benchmark_only")
+    elif max_model_len == 246000:
+        if not benchmark_only:
+            raise ValueError("Q2D 246K plan must be explicitly benchmark_only")
+    else:
+        raise ValueError("Q2D max_model_len must equal 161000 or 246000")
     if int(plan["write_page_count"]) + int(plan["read_cache_page_count"]) != int(
         plan["physical_page_count"]
     ):

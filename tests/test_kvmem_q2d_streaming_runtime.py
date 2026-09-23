@@ -95,6 +95,19 @@ def test_runtime_plan_freezes_partition_and_cpu_capacity():
         validate_streaming_plan(bad)
 
 
+def test_runtime_plan_allows_only_explicit_246k_benchmark_capacity():
+    maker = _load_maker()
+    plan = maker.promote(_q2c(), max_model_len=246000)
+    assert plan["benchmark_only"] is True
+    assert plan["max_model_len"] == 246000
+    assert plan["cpu_page_count"] == 15375
+    assert validate_streaming_plan(plan) == plan
+    with pytest.raises(ValueError, match="supports only"):
+        maker.promote(_q2c(), max_model_len=240000)
+    with pytest.raises(ValueError, match="benchmark_only"):
+        validate_streaming_plan(dict(plan, benchmark_only=False))
+
+
 def test_scheduler_owns_bounded_two_chunk_write_pipeline(monkeypatch, tmp_path):
     stats = tmp_path / "scheduler.jsonl"
     monkeypatch.setenv("VLLM_QWEN_KVMEM_Q2D_SCHED_STATS_PATH", str(stats))

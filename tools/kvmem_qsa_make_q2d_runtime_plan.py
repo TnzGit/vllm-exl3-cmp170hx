@@ -11,11 +11,12 @@ from pathlib import Path
 from vllm_exl3.kvmem_q2d_scheduler_runtime import validate_streaming_plan
 
 
-def promote(q2c: dict) -> dict:
+def promote(q2c: dict, *, max_model_len: int = 161000) -> dict:
     if q2c.get("mode") != "qsa_scheduler_owned_transition":
         raise ValueError("expected Q2C scheduler-owned plan")
     page_tokens = int(q2c["page_tokens"])
-    max_model_len = 161000
+    if max_model_len not in (161000, 246000):
+        raise ValueError("Q2D supports only qualified 161K or benchmark-only 246K")
     # Deliberately do not carry Q2C's 4096-entry resident-page list or sticky
     # policy into Q2D.  Q2D has one CPU-authoritative history and a disjoint,
     # dynamically populated READ cache; retaining those fields would make the
@@ -41,6 +42,8 @@ def promote(q2c: dict) -> dict:
             "history and dynamic READ tables coexist with scheduler WRITE slots."
         ),
     }
+    if max_model_len != 161000:
+        out["benchmark_only"] = True
     return validate_streaming_plan(out)
 
 
@@ -48,8 +51,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--q2c-plan", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--max-model-len", type=int, default=161000)
     args = ap.parse_args()
-    result = promote(json.loads(args.q2c_plan.read_text()))
+    result = promote(
+        json.loads(args.q2c_plan.read_text()),
+        max_model_len=args.max_model_len,
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
