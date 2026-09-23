@@ -8,7 +8,13 @@ OUT="${OUT:?set empty artifact directory}"
 MODEL_DIR="${MODEL_DIR:?set prepared EXL3 model pack}"
 PROMPT_CASE_DIR="${PROMPT_CASE_DIR:?set exact-token prompt cases}"
 
-readonly HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=246000
+readonly HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92
+case "${PREFIX_DIAGNOSTIC_SHORT_CONTEXT:-0}" in
+  0) MAX_MODEL_LEN=246000; CAPACITY_PROFILE=production-envelope ;;
+  1) MAX_MODEL_LEN=32768; CAPACITY_PROFILE=short-context-mechanism-only ;;
+  *) echo 'REFUSE: PREFIX_DIAGNOSTIC_SHORT_CONTEXT must be 0 or 1' >&2; exit 2 ;;
+esac
+readonly MAX_MODEL_LEN CAPACITY_PROFILE
 readonly NUM_SPEC_TOKENS=3 PROMPT_CASE_REL=ctx16000/turn_04_ask_d_e.json
 readonly REPEATS=2 MAX_TOKENS=8
 readonly VENV="${R0_ROOT:-/home/base-node/.codex_tasks/qwen38-flashnext-r0}/venv"
@@ -200,6 +206,7 @@ host=$HOST
 port=$PORT
 gpu_mem_util=$GPU_MEM_UTIL
 max_model_len=$MAX_MODEL_LEN
+capacity_profile=$CAPACITY_PROFILE
 max_num_batched_tokens=auto
 max_num_seqs=1
 prefix_caching=1
@@ -208,7 +215,7 @@ repeats=$REPEATS
 max_tokens=$MAX_TOKENS
 EOF
 
-event "RUN_START sha=$ACTUAL_SHA port=$PORT prefix=on mtp_k=$NUM_SPEC_TOKENS"
+event "RUN_START sha=$ACTUAL_SHA port=$PORT prefix=on mtp_k=$NUM_SPEC_TOKENS capacity_profile=$CAPACITY_PROFILE"
 : > "$OUT/server.log"; : > "$OUT/startup.txt"
 env MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL" MAX_MODEL_LEN="$MAX_MODEL_LEN" \
   MAX_NUM_SEQS=1 PORT="$PORT" HOST="$HOST" PREFIX_CACHING=1 NUM_SPEC_TOKENS=3 \

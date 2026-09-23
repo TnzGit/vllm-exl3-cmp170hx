@@ -13,7 +13,9 @@ class PrefixCacheRunnerContractTests(unittest.TestCase):
 
     def test_fixed_probe_configuration(self):
         for item in (
-            "readonly HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=246000",
+            "readonly HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92",
+            "0) MAX_MODEL_LEN=246000; CAPACITY_PROFILE=production-envelope",
+            "1) MAX_MODEL_LEN=32768; CAPACITY_PROFILE=short-context-mechanism-only",
             "readonly NUM_SPEC_TOKENS=3 PROMPT_CASE_REL=ctx16000/turn_04_ask_d_e.json",
             "PREFIX_CACHING=1 NUM_SPEC_TOKENS=3",
             'env MODEL_DIR="$MODEL_DIR" GPU_MEM_UTIL="$GPU_MEM_UTIL"',
