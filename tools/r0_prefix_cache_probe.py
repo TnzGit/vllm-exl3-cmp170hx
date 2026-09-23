@@ -39,10 +39,22 @@ BUSY_METRICS = {
     "running": "vllm:num_requests_running",
     "waiting": "vllm:num_requests_waiting",
 }
+OUTPUT_PREVIEW_CHARS = 240
 
 
 class ProbeFailure(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        metric_deltas: dict[str, float] | None = None,
+        request_evidence: dict[str, Any] | None = None,
+        partial_report: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.metric_deltas = metric_deltas
+        self.request_evidence = request_evidence
+        self.partial_report = partial_report
 
 
 def parse_metrics(payload: str) -> dict[str, float]:
@@ -172,7 +184,10 @@ def _wait_for_prefix_cache_metrics(
             for key in PREFIX_METRICS
         }
         if any(value < 0 for value in deltas.values()):
-            raise ProbeFailure("prefix-cache counters decreased/reset during the probe")
+            raise ProbeFailure(
+                "prefix-cache counters decreased/reset during the probe",
+                metric_deltas=deltas,
+            )
 
         queries_propagated = deltas["queries"] > 0
         hits_propagated = not require_hit or deltas["hits"] > 0
@@ -187,7 +202,8 @@ def _wait_for_prefix_cache_metrics(
                 f"prefix-cache metrics did not propagate {', '.join(waiting_for)} "
                 f"{where} within {wait_seconds:g}s "
                 f"(queries_delta={deltas['queries']:g}, "
-                f"hits_delta={deltas['hits']:g})"
+                f"hits_delta={deltas['hits']:g})",
+                metric_deltas=deltas,
             )
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
@@ -258,6 +274,21 @@ def _read_sse_completion(
     output_parts: list[str] = []
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+
+    def request_evidence() -> dict[str, Any]:
+        output_text = "".join(output_parts)
+        return {
+            "ttft_seconds": round(ttft, 6) if ttft is not None else None,
+            "prompt_tokens_usage": prompt_tokens,
+            "completion_tokens_usage": completion_tokens,
+            "output_text_sha256": hashlib.sha256(
+                output_text.encode("utf-8")
+            ).hexdigest(),
+            "output_text_characters": len(output_text),
+            "output_text_preview": output_text[:OUTPUT_PREVIEW_CHARS],
+            "output_text_preview_truncated": len(output_text) > OUTPUT_PREVIEW_CHARS,
+        }
+
     try:
         with urllib.request.urlopen(request, timeout=args.timeout) as response:
             for raw in response:
@@ -284,28 +315,33 @@ def _read_sse_completion(
                         if text and ttft is None:
                             ttft = time.monotonic() - start
                         output_parts.append(text)
-    except ProbeFailure:
+    except ProbeFailure as exc:
+        exc.request_evidence = request_evidence()
         raise
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise ProbeFailure(f"completion request failed: {exc}") from exc
+        raise ProbeFailure(
+            f"completion request failed: {exc}",
+            request_evidence=request_evidence(),
+        ) from exc
 
-    output_text = "".join(output_parts)
+    evidence = request_evidence()
     if ttft is None:
-        raise ProbeFailure("completion produced no text; TTFT is unavailable")
+        raise ProbeFailure(
+            "completion produced no text; TTFT is unavailable",
+            request_evidence=evidence,
+        )
     if completion_tokens is None or prompt_tokens is None:
-        raise ProbeFailure("stream omitted prompt/completion token usage")
+        raise ProbeFailure(
+            "stream omitted prompt/completion token usage",
+            request_evidence=evidence,
+        )
     if prompt_tokens != len(token_ids) or completion_tokens != args.max_tokens:
         raise ProbeFailure(
             f"unexpected token usage: prompt={prompt_tokens}, "
-            f"completion={completion_tokens}"
+            f"completion={completion_tokens}",
+            request_evidence=evidence,
         )
-    return {
-        "ttft_seconds": round(ttft, 6),
-        "prompt_tokens_usage": prompt_tokens,
-        "completion_tokens_usage": completion_tokens,
-        "output_text_sha256": hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
-        "output_text_characters": len(output_text),
-    }
+    return evidence
 
 
 def run_probe(args: argparse.Namespace) -> dict[str, Any]:
@@ -319,49 +355,86 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         raise ProbeFailure("/v1/models returned no usable model ID")
     model = models[0]["id"]
     token_ids = _resolve_prompt(args, base_url, model)
+    prompt_hash = hashlib.sha256(
+        json.dumps(token_ids, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    report_context = {
+        "model": model,
+        "prompt_token_count": len(token_ids),
+        "prompt_token_ids_sha256": prompt_hash,
+        "repeats": args.repeats,
+    }
 
     records: list[dict[str, Any]] = []
     deltas: list[dict[str, float]] = []
-    for index in range(args.repeats):
-        before = _fetch_metrics(base_url, args.timeout)
-        assert_idle(before, f"before request {index + 1}")
-        completion = _read_sse_completion(base_url, model, token_ids, args)
-        _wait_for_idle(
-            base_url, args.timeout, args.idle_timeout, f"after request {index + 1}"
-        )
-        after = _wait_for_prefix_cache_metrics(
-            base_url,
-            args.timeout,
-            args.metrics_timeout,
-            before,
-            require_hit=index == args.repeats - 1,
-            where=f"after request {index + 1}",
-        )
-        delta = {
-            key: after[key] - before[key]
-            for key in PREFIX_METRICS
-        }
-        if any(value < 0 for value in delta.values()):
-            raise ProbeFailure("prefix-cache counters decreased/reset during the probe")
-        records.append({
-            "request_index": index + 1,
-            **completion,
-            "prefix_cache_queries_delta": delta["queries"],
-            "prefix_cache_hits_delta": delta["hits"],
-        })
-        deltas.append(delta)
+    try:
+        for index in range(args.repeats):
+            before = _fetch_metrics(base_url, args.timeout)
+            assert_idle(before, f"before request {index + 1}")
+            try:
+                completion = _read_sse_completion(base_url, model, token_ids, args)
+            except ProbeFailure as exc:
+                if exc.request_evidence is not None:
+                    records.append({
+                        "request_index": index + 1,
+                        **exc.request_evidence,
+                        "prefix_cache_queries_delta": None,
+                        "prefix_cache_hits_delta": None,
+                    })
+                raise
+            record = {
+                "request_index": index + 1,
+                **completion,
+                "prefix_cache_queries_delta": None,
+                "prefix_cache_hits_delta": None,
+            }
+            records.append(record)
+            try:
+                _wait_for_idle(
+                    base_url, args.timeout, args.idle_timeout,
+                    f"after request {index + 1}",
+                )
+                after = _wait_for_prefix_cache_metrics(
+                    base_url,
+                    args.timeout,
+                    args.metrics_timeout,
+                    before,
+                    require_hit=index == args.repeats - 1,
+                    where=f"after request {index + 1}",
+                )
+            except ProbeFailure as exc:
+                if exc.metric_deltas is not None:
+                    record["prefix_cache_queries_delta"] = exc.metric_deltas["queries"]
+                    record["prefix_cache_hits_delta"] = exc.metric_deltas["hits"]
+                raise
+            delta = {
+                key: after[key] - before[key]
+                for key in PREFIX_METRICS
+            }
+            record["prefix_cache_queries_delta"] = delta["queries"]
+            record["prefix_cache_hits_delta"] = delta["hits"]
+            if any(value < 0 for value in delta.values()):
+                raise ProbeFailure(
+                    "prefix-cache counters decreased/reset during the probe",
+                    metric_deltas=delta,
+                )
+            deltas.append(delta)
 
-    evaluate_hit_evidence(deltas)
-    if len({record["output_text_sha256"] for record in records}) != 1:
-        raise ProbeFailure("greedy output changed across identical prompt requests")
+        evaluate_hit_evidence(deltas)
+        if len({record["output_text_sha256"] for record in records}) != 1:
+            raise ProbeFailure("greedy output changed across identical prompt requests")
+    except ProbeFailure as exc:
+        exc.partial_report = {
+            "status": "FAIL",
+            **report_context,
+            "requests": records,
+            "error": str(exc),
+        }
+        raise
+
     return {
         "status": "PASS",
-        "model": model,
-        "prompt_token_count": len(token_ids),
-        "prompt_token_ids_sha256": hashlib.sha256(
-            json.dumps(token_ids, separators=(",", ":")).encode("ascii")
-        ).hexdigest(),
-        "repeats": args.repeats,
+        **report_context,
         "requests": records,
         "evidence": "final identical prompt had positive prefix-cache query and hit token deltas",
     }
@@ -404,15 +477,19 @@ def main() -> int:
         report = run_probe(args)
         exit_code = 0
     except ProbeFailure as exc:
-        report = {"status": "FAIL", "error": str(exc)}
+        report = exc.partial_report or {"status": "FAIL", "error": str(exc)}
         exit_code = 1
 
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.out:
         try:
-            args.out.write_text(rendered, encoding="utf-8")
+            with args.out.open("x", encoding="utf-8") as output_file:
+                output_file.write(rendered)
         except OSError as exc:
-            print(f"ERROR: cannot write report to {args.out}: {exc}", file=sys.stderr)
+            print(
+                f"ERROR: cannot create report at {args.out} without overwriting: {exc}",
+                file=sys.stderr,
+            )
             return 2
     print(rendered, end="")
     return exit_code

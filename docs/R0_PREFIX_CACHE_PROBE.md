@@ -32,3 +32,15 @@ mechanism-only cell using the same 15533-token prompt. Its result cannot
 qualify the 246000-token production envelope; it only separates boot sizing
 from hybrid/MTP prefix-cache behavior. The default remains the original
 246000-token envelope.
+
+The short-context cell at exact head
+`8f4ce1559245ade4f34833a02626acc04a152076` booted and completed two
+identical 15533-token requests. Raw Prometheus totals rose by 31066 queried
+tokens and 12800 cached-token hits. The probe's final output-hash equality
+gate failed, so APC semantics are **not qualified**. The first probe version
+retained only the error, not each generated answer; it is not enough to
+attribute the mismatch to APC versus MTP/runtime nondeterminism or generation
+after EOS. Xid remained zero; port and GPU processes were clean after owned
+shutdown. A later controlled comparison must preserve both outputs and run
+the same short prompt with APC off before assigning root cause. This is
+lower priority than the independently scheduled refusal-edit baseline.
