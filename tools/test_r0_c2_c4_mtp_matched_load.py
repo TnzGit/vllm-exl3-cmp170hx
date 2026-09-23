@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("r0_c2_c4_mtp_matched_load.py")
@@ -42,7 +46,7 @@ def valid_manifest() -> dict:
             "model_config_sha256": "9" * 64,
             "tokenizer_sha256": "c" * 64,
             "installed_exl3_source_sha256": "e" * 64,
-            "r0_source_sha256": "f" * 64,
+            "r0_source_commit": "f" * 40,
         },
         "runtime_expectations": {
             "vllm_version": "0.29.0",
@@ -127,6 +131,49 @@ class C2C4MatchedLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.CellError, "hash mismatch"):
                 runner.load_prompt_manifest(path)
 
+    def test_manifest_requires_full_lowercase_r0_commit(self) -> None:
+        for bad in ("f" * 64, "f" * 39, "F" * 40, "g" * 40):
+            doc = valid_manifest()
+            doc["provenance"]["r0_source_commit"] = bad
+            with tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "prompts.json"
+                path.write_text(json.dumps(doc))
+                with self.assertRaisesRegex(runner.CellError, "r0_source_commit"):
+                    runner.load_prompt_manifest(path)
+
+    def test_cli_compares_expected_commit_and_requires_it_for_execution(self) -> None:
+        manifest = valid_manifest()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "prompts.json"
+            path.write_text(json.dumps(manifest))
+            with contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(sys, "argv", [str(SCRIPT), "--manifest", str(path),
+                                                  "--expected-r0-source-commit", "f" * 40,
+                                                  "--dry-run"]):
+                    self.assertEqual(runner.main(), 0)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with patch.object(sys, "argv", [str(SCRIPT), "--manifest", str(path),
+                                                  "--expected-r0-source-commit", "0" * 40,
+                                                  "--dry-run"]):
+                    self.assertEqual(runner.main(), 2)
+                with patch.object(sys, "argv", [str(SCRIPT), "--manifest", str(path), "--execute"]):
+                    self.assertEqual(runner.main(), 2)
+
+    def test_runtime_proof_requires_exact_frozen_r0_commit(self) -> None:
+        manifest = valid_manifest()
+        proof = {
+            "num_speculative_tokens": 2,
+            "vllm_version": "0.29.0",
+            "exllamav3_revision": "d" * 40,
+            "installed_exl3_source_sha256": "e" * 64,
+            "r0_source_commit": "0" * 40,
+            "driver_version": "test-driver",
+            "cuda_version": "test-cuda",
+            "torch_version": "test-torch",
+        }
+        with self.assertRaisesRegex(runner.CellError, "r0_source_commit"):
+            runner.validate_runtime_proof(proof, manifest, "c2_16k", 2)
+
     def test_manifest_rejects_any_shared_prompt_prefix(self) -> None:
         doc = valid_manifest()
         requests = doc["points"]["c2_16k"]["requests"]
@@ -156,7 +203,7 @@ class C2C4MatchedLoadTests(unittest.TestCase):
             "installed_exl3_source_sha256": manifest["provenance"][
                 "installed_exl3_source_sha256"
             ],
-            "r0_source_sha256": manifest["provenance"]["r0_source_sha256"],
+            "r0_source_commit": manifest["provenance"]["r0_source_commit"],
             "driver_version": "test-driver",
             "cuda_version": "test-cuda",
             "torch_version": "test-torch",

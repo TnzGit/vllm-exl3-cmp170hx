@@ -46,7 +46,7 @@ LAUNCHER="$R0_REPO/tools/serve_cmp170hx_qwen_firstboot.sh"
 [[ "$HOST" == 127.0.0.1 && "$PORT" == 8002 ]] || exit 2
 
 if (( DRY_RUN )); then
-  "$VENV/bin/python" "$HELPER" --manifest "$MANIFEST" --dry-run >/dev/null
+  "$VENV/bin/python" "$HELPER" --manifest "$MANIFEST" --expected-r0-source-commit "$EXPECTED_SHA" --dry-run >/dev/null
   printf 'DRY_RUN point=%s k=%s port=%s gpu_memory_utilization=%s max_model_len=%s max_num_seqs=%s max_num_batched_tokens=auto coop=1 graph=PIECEWISE text_only=1 disk_ngram=1 profiler=off prefix_caching=off\n' \
     "$POINT" "$K" "$PORT" "$GPU_MEM_UTIL" "$MAX_MODEL_LEN" "$MAX_NUM_SEQS"
   exit 0
@@ -217,12 +217,14 @@ unset VLLM_CONFIG
 
 # Stream-hash the model tree and tokenizer assets; reject symlinks and compare
 # against the frozen manifest before creating an engine. No mmap/model load.
-"$VENV/bin/python" - "$HELPER" "$MANIFEST" "$MODEL_DIR" "$OUT/input_hashes.json" <<'PY'
+"$VENV/bin/python" - "$HELPER" "$MANIFEST" "$MODEL_DIR" "$OUT/input_hashes.json" "$EXPECTED_SHA" <<'PY'
 import hashlib, importlib.util, json, pathlib, sys
-helper, manifest_path, model_text, output = map(pathlib.Path, sys.argv[1:])
+helper, manifest_path, model_text, output = map(pathlib.Path, sys.argv[1:5])
 spec = importlib.util.spec_from_file_location("r0_c2_helper", helper)
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 manifest, raw = module.load_prompt_manifest(manifest_path)
+if manifest["provenance"]["r0_source_commit"] != sys.argv[5]:
+    raise SystemExit("BLOCKED: manifest r0_source_commit differs from EXPECTED_SHA")
 model_arg=pathlib.Path(model_text)
 if model_arg.is_symlink(): raise SystemExit("BLOCKED: model dir cannot be a symlink")
 root = model_arg.resolve()
@@ -376,7 +378,7 @@ if "$VENV/bin/python" - "$HELPER" "$MANIFEST" "$OUT/server.log" "$OUT/input_hash
   "$OUT/runtime_proof.json" > "$OUT/runtime_proof_build.log" 2>&1 <<'PY'
 import importlib.metadata as md, importlib.util, json, pathlib, subprocess, sys
 helper, manifest_path, log_path, hashes_path = map(pathlib.Path, sys.argv[1:5])
-point, k, pid, pgid, r0_sha, plugin_sha, proof_path = sys.argv[5:]
+point, k, pid, pgid, r0_commit, plugin_sha, proof_path = sys.argv[5:]
 spec=importlib.util.spec_from_file_location("r0_c2_helper",helper)
 module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 manifest, _=module.load_prompt_manifest(manifest_path)
@@ -447,7 +449,7 @@ observed={"engine_id":f"pid-{pid}-pgid-{pgid}-{pathlib.Path(log_path).stat().st_
  "model_pack_sha256":hashes["model_tree_sha256"],"tokenizer_sha256":hashes["tokenizer_tree_sha256"],
  "model_config_sha256":hashes["model_config_sha256"],"installed_vllm_config_source_sha256":vllm_source_sha256,
  "installed_vllm_arg_utils_source_sha256":arg_source_sha256,
- "installed_exl3_source_sha256":plugin_sha,"r0_source_sha256":r0_sha,
+ "installed_exl3_source_sha256":plugin_sha,"r0_source_commit":r0_commit,
  "scheduler_override_absent":True}
 for key in ("vllm_version","exllamav3_revision","driver_version","cuda_version","torch_version"):
     if observed[key] != manifest["runtime_expectations"].get(key):
@@ -473,7 +475,7 @@ else
 fi
 
 event "PROOF_PASS point=$POINT k=$K budget_source=EngineCore_warning+vllm_0.29.0_default kv=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["kv_pool_tokens"])' "$OUT/runtime_proof.json")"
-if "$VENV/bin/python" "$HELPER" --manifest "$MANIFEST" --execute --point "$POINT" --k "$K" \
+if "$VENV/bin/python" "$HELPER" --manifest "$MANIFEST" --expected-r0-source-commit "$EXPECTED_SHA" --execute --point "$POINT" --k "$K" \
      --runtime-proof "$OUT/runtime_proof.json" --out-dir "$OUT/cell" --base-url "http://$HOST:$PORT" \
      > "$OUT/helper.stdout.log" 2>&1; then
   event 'CELL_RESULT PASS'

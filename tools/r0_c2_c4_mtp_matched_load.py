@@ -134,7 +134,7 @@ def make_runtime_proof(
         "tokenizer_sha256": observed["tokenizer_sha256"],
         "exllamav3_revision": observed["exllamav3_revision"],
         "installed_exl3_source_sha256": observed["installed_exl3_source_sha256"],
-        "r0_source_sha256": observed["r0_source_sha256"],
+        "r0_source_commit": observed["r0_source_commit"],
         "installed_vllm_config_source_sha256": observed[
             "installed_vllm_config_source_sha256"
         ],
@@ -176,8 +176,8 @@ def make_runtime_proof(
         "installed_exl3_source_sha256"
     ]:
         raise CellError("Installed EXL3 source hash differs from frozen manifest")
-    if proof["r0_source_sha256"] != manifest["provenance"]["r0_source_sha256"]:
-        raise CellError("R0 source hash differs from frozen manifest")
+    if proof["r0_source_commit"] != manifest["provenance"]["r0_source_commit"]:
+        raise CellError("R0 source commit differs from frozen manifest")
     if proof["model_pack_sha256"] != manifest["provenance"]["model_pack_sha256"]:
         raise CellError("Model pack hash differs from frozen manifest")
     if proof["tokenizer_sha256"] != manifest["provenance"]["tokenizer_sha256"]:
@@ -224,7 +224,6 @@ def load_prompt_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
         "model_config_sha256",
         "tokenizer_sha256",
         "installed_exl3_source_sha256",
-        "r0_source_sha256",
     )
     if not isinstance(provenance, dict):
         raise CellError("Prompt manifest has no provenance object")
@@ -235,6 +234,9 @@ def load_prompt_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
             provenance[name]
         ):
             raise CellError(f"Missing or malformed provenance hash: {name}")
+    source_commit = provenance.get("r0_source_commit")
+    if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise CellError("Missing or malformed provenance commit: r0_source_commit")
     runtime_expectations = doc.get("runtime_expectations")
     expected_runtime_fields = (
         "vllm_version",
@@ -355,14 +357,15 @@ def validate_runtime_proof(
         "vllm_version",
         "exllamav3_revision",
         "installed_exl3_source_sha256",
-        "r0_source_sha256",
+        "r0_source_commit",
         "driver_version",
         "cuda_version",
         "torch_version",
     ):
         expected = (
             manifest["provenance"][field]
-            if field.endswith("_sha256") and field in manifest["provenance"]
+            if (field.endswith("_sha256") or field == "r0_source_commit")
+            and field in manifest["provenance"]
             else runtime_expectations.get(field)
         )
         if proof.get(field) != expected:
@@ -380,8 +383,10 @@ def validate_runtime_proof(
             raise CellError(f"Runtime proof {field} does not match manifest")
     if not PROMPT_SHA_RE.fullmatch(proof["installed_exl3_source_sha256"]):
         raise CellError("Malformed installed EXL3 source SHA-256")
-    if not PROMPT_SHA_RE.fullmatch(proof["r0_source_sha256"]):
-        raise CellError("Malformed R0 source SHA-256")
+    if not isinstance(proof["r0_source_commit"], str) or not re.fullmatch(
+        r"[0-9a-f]{40}", proof["r0_source_commit"]
+    ):
+        raise CellError("Malformed R0 source commit")
     config = proof.get("config")
     if not isinstance(config, dict):
         raise CellError("Runtime proof has no observed config")
@@ -956,6 +961,7 @@ def _dry_run(manifest: dict[str, Any], raw: bytes) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--expected-r0-source-commit")
     parser.add_argument(
         "--dry-run", action="store_true", help="validate and print plan"
     )
@@ -974,9 +980,16 @@ def main() -> int:
         args.dry_run = True
     try:
         manifest, raw = load_prompt_manifest(args.manifest)
+        if args.expected_r0_source_commit is not None:
+            if not re.fullmatch(r"[0-9a-f]{40}", args.expected_r0_source_commit):
+                raise CellError("Expected R0 source commit must be 40 lowercase hex chars")
+            if manifest["provenance"]["r0_source_commit"] != args.expected_r0_source_commit:
+                raise CellError("Manifest r0_source_commit differs from expected R0 source commit")
         if args.dry_run:
             print(json.dumps(_dry_run(manifest, raw), indent=2, sort_keys=True))
             return 0
+        if args.expected_r0_source_commit is None:
+            raise CellError("Execution requires --expected-r0-source-commit")
         if not all((args.point, args.k, args.runtime_proof, args.out_dir)):
             parser.error(
                 "--execute requires --point, --k, --runtime-proof, and --out-dir"
