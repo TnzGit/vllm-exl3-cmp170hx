@@ -65,7 +65,7 @@ FROZEN_CONFIG = {
     "profiler": False,
     "prefix_caching": False,
     "gpu_memory_utilization": 0.92,
-    "max_model_len": 246_000,
+    "max_model_len": 240_000,
     "max_num_seqs": 4,
     "max_num_batched_tokens": "auto",
 }

@@ -11,11 +11,25 @@ Use the same Qwen3.8-Flash-Next Qwen4Exp EXL3 3bpw model pack and runtime
 identity for every cell; record pack/revision hashes, vLLM 0.29.0 and
 ExLlamaV3 revision, installed EXL3 source SHA, driver/CUDA/PyTorch, and full
 R0 source SHA. The only A/B variable is `num_speculative_tokens` (2 or 3).
-Keep the production non-KVMEM path fixed: COOP=1, PIECEWISE graphs,
+Keep the revised non-KVMEM benchmark profile fixed: COOP=1, PIECEWISE graphs,
 text-only, disk n-gram, profiler off, prefix caching off, `GPU_MEM_UTIL=0.92`,
-`MAX_MODEL_LEN=246000`, `MAX_NUM_SEQS=4`, and
+`MAX_MODEL_LEN=240000`, `MAX_NUM_SEQS=4`, and
 `MAX_NUM_BATCHED_TOKENS=auto` (log the effective value and require it to match
 across all cells). Port 8002. Do not tune the envelope per k or per workload.
+
+**Revised 240K capacity profile after failed live1:** The original 246000
+maximum-length profile failed before `/health` or any request: default
+PIECEWISE graph capture used 0.56 GiB, leaving 6.74 GiB KV against 6.83 GiB
+required. That failure remains a separate 246K boot result. The user accepted
+`MAX_MODEL_LEN=240000` as the final configuration label for this study. Apply
+that value uniformly to **both** k values and all load points; retain the
+default graph-capture policy, `max_num_seqs=4`, `.92` memory fraction, MTP
+settings, and exact token-ID inputs. This is a new fixed service envelope,
+not evidence that 246K works. Record effective graph sizes and KV headroom
+from startup logs, and preserve all original correctness and machine-hygiene
+gates. If 240K still cannot boot, retain the failure artifacts and stop for
+diagnosis; do not silently raise memory utilization, disable graph-memory
+accounting, or change any other capacity parameter.
 
 | Cell family | Simultaneous requests | Per-request input | Output per request |
 |---|---:|---:|---:|
@@ -109,7 +123,7 @@ not per-request evidence.
   per-cell result/status manifest.
 - Before requests, record the actual KV pool and require capacity for the
   largest live set (2 x (79,533 + 256) tokens, plus at least 20% headroom) under
-  the fixed 0.92/246000 envelope. The earlier k3 C1 pool of 279,087 tokens is
+  the fixed 0.92/240000 envelope. The earlier k3 C1 pool of 279,087 tokens is
   context only, not a capacity guarantee for k2/k3 with `MAX_NUM_SEQS=4`.
   If startup/admission cannot meet this gate, mark that cell NO-GO; do not
   raise utilization, shorten context, or otherwise alter the comparison.

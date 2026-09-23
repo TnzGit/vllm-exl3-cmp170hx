@@ -15,7 +15,7 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
     def test_one_cell_arguments_and_frozen_envelope_are_explicit(self):
         for text in (
             "POINT=\"$1\" K=\"$2\"",
-            "MAX_MODEL_LEN=246000",
+            "MAX_MODEL_LEN=240000",
             "MAX_NUM_SEQS=4",
             "GPU_MEM_UTIL=0.92",
             "MAX_NUM_BATCHED_TOKENS=",
@@ -25,6 +25,11 @@ class OwnedCellRunnerContractTests(unittest.TestCase):
             "PORT=8002",
         ):
             self.assertIn(text, self.text)
+        self.assertNotIn("246000", self.text)
+        self.assertIn('args[args.index("--max-model-len")+1] != "240000"', self.text)
+        self.assertIn('"MAX_MODEL_LEN":"240000"', self.text)
+        helper = SCRIPT.with_name("r0_c2_c4_mtp_matched_load.py").read_text(encoding="utf-8")
+        self.assertIn('"max_model_len": 240_000', helper)
 
     def test_proof_gate_precedes_first_helper_execution(self):
         proof = self.text.index('"$OUT/runtime_proof_build.log" 2>&1 <<\'PY\'')

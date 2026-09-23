@@ -39,7 +39,7 @@ OUT="${OUT:?set OUT to a new per-cell artifact directory}"
 R0_ROOT="${R0_ROOT:-/home/base-node/.codex_tasks/qwen38-flashnext-r0}"
 VENV="$R0_ROOT/venv"
 IDENTITY_CACHE="$R0_ROOT/cache/r0_c2_c4_model_identity.json"
-HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=246000 MAX_NUM_SEQS=4
+HOST=127.0.0.1 PORT=8002 GPU_MEM_UTIL=0.92 MAX_MODEL_LEN=240000 MAX_NUM_SEQS=4
 LAUNCH_TIMEOUT="${LAUNCH_TIMEOUT:-2400}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$SCRIPT_DIR/r0_c2_c4_mtp_matched_load.py"
@@ -301,8 +301,8 @@ for forbidden in ("--max-num-scheduled-tokens", "--max-num-batched-tokens", "--c
     if forbidden in args: raise SystemExit(f"BLOCKED: unexpected explicit CLI option {forbidden}")
 if "--max-num-seqs" not in args or args[args.index("--max-num-seqs")+1] != "4":
     raise SystemExit("BLOCKED: live argv does not show max-num-seqs=4")
-if "--max-model-len" not in args or args[args.index("--max-model-len")+1] != "246000":
-    raise SystemExit("BLOCKED: live argv does not show max-model-len=246000")
+if "--max-model-len" not in args or args[args.index("--max-model-len")+1] != "240000":
+    raise SystemExit("BLOCKED: live argv does not show max-model-len=240000")
 if "--no-enable-prefix-caching" not in args:
     raise SystemExit("BLOCKED: live argv does not explicitly disable prefix caching")
 if "--language-model-only" not in args:
@@ -323,7 +323,7 @@ if value.get("method") != "qwen4_exp_mtp" or value.get("num_speculative_tokens")
     raise SystemExit("BLOCKED: live argv speculative k/method mismatch")
 envraw=pathlib.Path(f"/proc/{sys.argv[1]}/environ").read_bytes()
 env={item.split(b"=",1)[0].decode():item.split(b"=",1)[1].decode(errors="replace") for item in envraw.split(b"\0") if b"=" in item}
-expected={"GPU_MEM_UTIL":"0.92","MAX_MODEL_LEN":"246000","MAX_NUM_SEQS":"4","PORT":"8002",
+expected={"GPU_MEM_UTIL":"0.92","MAX_MODEL_LEN":"240000","MAX_NUM_SEQS":"4","PORT":"8002",
           "HOST":"127.0.0.1","PREFIX_CACHING":"0","NUM_SPEC_TOKENS":sys.argv[2],
           "MAX_NUM_BATCHED_TOKENS":"","VLLM_EXL3_COOP":"1","VLLM_EXL3_NGRAM_TABLE":"disk",
           "VLLM_EXL3_NGRAM_KERNEL":"ext",

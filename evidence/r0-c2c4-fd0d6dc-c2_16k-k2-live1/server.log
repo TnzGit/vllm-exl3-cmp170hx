@@ -1,0 +1,656 @@
+[2026-09-23T13:50:45Z] launch point=c2_16k k=2
+[preflight]
+CMP170HX Qwen3.8-Flash-Next EXL3 preflight
+profile=text-no-draft
+python=3.12.3 platform=Linux-7.0.0-31-generic-x86_64-with-glibc2.39
+packages={"exllamav3": "1.5.0", "torch": "2.13.0", "vllm": "0.29.0", "vllm-exl3": "0.4.2"}
+plugin_checkout_head=fd0d6dca871ca5a512393b48e334fe26a5086e73
+env={"VLLM_EXL3_ARENA_PRESCAN": "1", "VLLM_EXL3_COOP": "1", "VLLM_EXL3_EXPERT_MATCH_CACHE": "1", "VLLM_EXL3_FAT_THRESHOLD": null, "VLLM_EXL3_GC_AFTER_MOE_LAYER": "0", "VLLM_EXL3_MADV_AFTER_H2D": "0", "VLLM_EXL3_MODEL_DIR": "/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw", "VLLM_EXL3_MOE_KERNEL": null, "VLLM_EXL3_NGRAM_KERNEL": "ext", "VLLM_EXL3_NGRAM_TABLE": "disk", "VLLM_EXL3_TRELLIS_ARENA": "1"}
+PASS  GPU                     NVIDIA CMP 170HX; cc=8.0; VRAM=63.39 GiB; torch=2.13.0+cu130; CUDA=13.0
+PASS  exllamav3_ext           version=1.5.0; symbols={"exl3_moe": true, "exl3_moe_coop": true, "ngram_dequant": true, "reconstruct": true}
+PASS  vLLM                    path=/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm; version=0.29.0
+PASS  main lm_head quant      ParallelLMHead must receive quant_config=self.quant_config
+PASS  PLE quant plumbing      vLLM 0.29 must keep Qwen's preselected FP8 quant_method and also pass quant_config so EXL3 can fall through to Exl3EmbeddingMethod
+SKIP  MTP lm_head quant       not required for no-draft profile
+SKIP  MTP hidden-buffer device  not required for no-draft profile
+SKIP  vision split qkv        not required for language-model-only profile
+PASS  vllm-exl3               registered; runtime_diagnostics available
+runtime_diagnostics=
+{
+  "cpu_offload": {
+    "execution_available": false,
+    "note": "vllm-exl3 does not provide a host-CPU expert compute backend; use plan_exllamav3_cpu_offload() for that external runtime contract",
+    "owner": "external ExLlamaV3 experiment only"
+  },
+  "deepseek_v41": {
+    "compat_installed": true,
+    "recommended_tp4_ep4": {
+      "exllamav3_fused_candidate": true,
+      "expert_parallel": true,
+      "expert_parallel_size": 4,
+      "global_experts": 384,
+      "hidden_size": 5120,
+      "intermediate_size": 2304,
+      "intermediate_size_per_rank": 2304,
+      "local_experts": 96,
+      "moe_tensor_parallel_size": 1,
+      "native_p2b_candidate": true,
+      "native_p2b_default_enabled": false,
+      "native_p2b_requires_abi": 3,
+      "preferred_first_boot_backend": "exllamav3",
+      "reason": "TP4+EP4 keeps 96 full experts per rank at 5120x2304. ExLlamaV3 is the correctness-first backend; ABI-3 native p2b is an explicit A/B for K2-K4 layers only.",
+      "tensor_parallel_size": 4,
+      "top_k": 6
+    }
+  },
+  "exllamav3_exl3_moe_arity": 35,
+  "fat_expert_threshold": 256,
+  "fat_kernel_available": true,
+  "fused_temp_rows_actual": 2048,
+  "fused_temp_rows_override_active": false,
+  "fused_temp_rows_requested": 2048,
+  "grouped_prefill": {
+    "execution_available": false,
+    "max_rows_per_window": 8192,
+    "requested": false,
+    "supported_bits": [
+      2,
+      3
+    ]
+  },
+  "mixed_k": {
+    "arena_prescan_guard_installed": true,
+    "arena_prescan_placement_contract": "linear_contiguous_global_expert_ids",
+    "config_bits": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "cudagraph_qualified": false,
+    "exllamav3_moe_kernel_bits": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "fused_k_source": "physical_trellis_geometry",
+    "heterogeneous_dispatch": "python_loop",
+    "k78_config_compat_installed": true,
+    "legacy_shape_overlap_diagnostic": false,
+    "legacy_shape_overlap_note": "The old opt-in partial-copy trellis diagnostic is superseded by exact-shape per-expert trellis allocation. Non-trellis scale/marker shape mismatches remain hard failures.",
+    "native_qualified_bits": [
+      2,
+      3,
+      4
+    ],
+    "note": "K7/K8 are accepted for ExLlamaV3 execution. The custom native p2b path remains K2-K4. Routed experts store exact per-expert trellis shapes (including intra-expert w1/w2/w3 K disagreement). Heterogeneous packed K within a layer forces the LinearEXL3 python_loop; uniform-K layers still use the fused fast path using the K encoded by the loaded trellis, not a config default. The heterogeneous path is correctness-first and should remain eager until CUDA-graph qualification is completed.",
+    "physical_fused_k_guard_installed": true,
+    "recommended_first_boot": "eager",
+    "routed_allocation_scope": "per-expert exact trellis shapes; uniform-K layers keep fused path",
+    "tensor_level_mixed_k_within_layer": true,
+    "uniform_k_dispatch": "fused_when_available"
+  },
+  "moe_backend": "native",
+  "native_abi": 3,
+  "native_available": true,
+  "native_row_caps": {
+    "2": 8,
+    "3": 8,
+    "4": 8
+  },
+  "per_bit_native_policy_installed": true,
+  "spec_schedule": "<default>",
+  "tp_geometry": {
+    "nested_moe_config_compat_installed": true,
+    "note": "Expert-parallel layouts can have MoE tp_size=1 while process TP is >1; weight slicing must use the per-MoE geometry.",
+    "resolution_order": "RoutedExperts.moe_config.moe_parallel_config -> legacy layer attrs -> process TP"
+  },
+  "trellis_load": {
+    "arena_enabled": true,
+    "arena_prescan": true,
+    "direct_fill_stats": {
+      "DIRECT_FILL_BYTES": 0,
+      "DIRECT_FILL_CALLS": 0,
+      "DIRECT_FILL_DEVICE": "",
+      "DIRECT_FILL_FALLBACK_BYTES": 0,
+      "DIRECT_FILL_FALLBACK_CALLS": 0,
+      "MADV_AFTER_H2D_BYTES": 0,
+      "MADV_AFTER_H2D_CALLS": 0
+    },
+    "model_dir": "/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw",
+    "note": "For a prepared local pack, direct-fill is expected to dominate routed trellis loading. A large fallback count means arena prescan did not produce a complete plan."
+  },
+  "uva_expert_offload": {
+    "execution_model": "GPU kernels over vLLM mapped pinned-host UVA views",
+    "guard_installed": true,
+    "parameter_segments": [
+      "w13_trellis",
+      "w13_suh",
+      "w13_svh",
+      "w2_trellis",
+      "w2_suh",
+      "w2_svh"
+    ],
+    "qualification": "experimental; requires real GPU parity/performance testing",
+    "requested": false
+  }
+}
+NOTE  disk n-gram requires PIECEWISE CUDA graphs and vllm::exl3_ngram_lookup_out in splitting_ops; verify the worker-side effective compilation config after the server starts.
+[runtime]
+  MODEL_DIR                    /home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw
+  GPU_MEM_UTIL                 0.92
+  MAX_MODEL_LEN                246000
+  MAX_NUM_SEQS                 4
+  MAX_NUM_BATCHED_TOKENS       <default>
+  PORT                         8002
+  NUM_SPEC_TOKENS              2
+  PREFIX_CACHING               0
+  VLLM_EXL3_MODEL_DIR          /home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw
+  VLLM_EXL3_TRELLIS_ARENA      1
+  VLLM_EXL3_ARENA_PRESCAN      1
+  VLLM_EXL3_MADV_AFTER_H2D     0
+  VLLM_EXL3_EXPERT_MATCH_CACHE 1
+  VLLM_EXL3_GC_AFTER_MOE_LAYER 0
+  VLLM_EXL3_COOP               1
+  VLLM_EXL3_NGRAM_TABLE        disk
+  VLLM_EXL3_NGRAM_KERNEL       ext
+  TORCH_PROFILER_DIR           <off>
+  ENFORCE_EAGER                0
+  speculation                  2 draft token(s) (0 = disabled)
+  prefix caching               disabled explicitly
+  service profile              text-only
+  CUDA graph mode              PIECEWISE
+[exec] vllm serve /home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw --host 127.0.0.1 --port 8002 --quantization exl3 --language-model-only --max-model-len 246000 --max-num-seqs 4 --gpu-memory-utilization 0.92 --compilation-config {"cudagraph_mode": "PIECEWISE", "splitting_ops": ["vllm::unified_attention_with_output", "vllm::unified_mla_attention_with_output", "vllm::mamba_mixer2", "vllm::mamba_mixer", "vllm::short_conv", "vllm::qwen4_exp_compute_ple_ngram_ids", "vllm::qwen4_exp_ple_short_conv", "vllm::qwen4_exp_qsa_with_output", "vllm::linear_attention", "vllm::qwen_gdn_attention_core", "vllm::qwen_gdn_attention_core_fused_norm_packed", "vllm::gdn_attention_core_xpu", "vllm::olmo_hybrid_gdn_full_forward", "vllm::sparse_attn_indexer", "vllm::rocm_aiter_sparse_attn_indexer", "vllm::deepseek_v4_attention", "vllm::hpc_rope_norm_forward", "vllm::exl3_ngram_lookup_out"]} --no-enable-prefix-caching --speculative-config {"method":"qwen4_exp_mtp","num_speculative_tokens":2}
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347] 
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347]        █     █     █▄   ▄█
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.29.0
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347]   █▄█▀ █     █     █     █  model   /home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:347] 
+(APIServer pid=534559) INFO 09-23 21:51:09 [api_utils.py:286] non-default args: {'model_tag': '/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw', 'host': '127.0.0.1', 'port': 8002, 'model': '/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw', 'max_model_len': 246000, 'quantization': 'exl3', 'enable_prefix_caching': False, 'language_model_only': True, 'max_num_seqs': 4, 'speculative_config': {'method': 'qwen4_exp_mtp', 'num_speculative_tokens': 2}, 'compilation_config': {'mode': None, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': [], 'ir_enable_torch_wrap': None, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_compute_ple_ngram_ids', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::exl3_ngram_lookup_out'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': None, 'pass_config': {}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': None, 'static_all_moe_layers': []}}
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_MADV_AFTER_H2D
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_GC_AFTER_MOE_LAYER
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_MODEL_DIR
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_NGRAM_TABLE
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_NGRAM_KERNEL
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_EXPERT_MATCH_CACHE
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_TRELLIS_ARENA
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_COOP
+(APIServer pid=534559) WARNING 09-23 21:51:09 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_EXL3_ARENA_PRESCAN
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) INFO 09-23 21:51:16 [model.py:684] Resolved architecture: Qwen4ExpForConditionalGeneration
+(APIServer pid=534559) INFO 09-23 21:51:16 [model.py:2021] Using max model len 246000
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) INFO 09-23 21:51:17 [registry.py:141] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.
+(APIServer pid=534559) INFO 09-23 21:51:17 [model.py:887] Disabled mm_prefix attention mode because multimodal inputs are configuration-disabled. Attention backends without mm_prefix support may now be selected.
+(APIServer pid=534559) WARNING 09-23 21:51:17 [speculative.py:1091] method `qwen4_exp_mtp` is deprecated and replaced with mtp.
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(APIServer pid=534559) INFO 09-23 21:51:17 [model.py:684] Resolved architecture: Qwen4ExpMTP
+(APIServer pid=534559) INFO 09-23 21:51:17 [model.py:2021] Using max model len 262144
+(APIServer pid=534559) WARNING 09-23 21:51:17 [speculative.py:1318] Enabling num_speculative_tokens > 1 will run multiple times of forward on same MTP layer,which may result in lower acceptance rate
+(APIServer pid=534559) INFO 09-23 21:51:17 [speculative.py:1586] Overriding draft model max model len from 262144 to 246000
+(APIServer pid=534559) INFO 09-23 21:51:17 [arg_utils.py:2404] Hybrid model with EAGLE speculative decoding: defaulting prefix_cache_retention_interval to dense checkpointing.
+(APIServer pid=534559) INFO 09-23 21:51:18 [kernel.py:369] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(APIServer pid=534559) WARNING 09-23 21:51:18 [vllm.py:1924] max_num_scheduled_tokens is set to 2048 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+(APIServer pid=534559) INFO 09-23 21:51:18 [compilation.py:329] Enabled custom fusions: rope_kvcache_cat_mla
+(EngineCore pid=534777) INFO 09-23 21:51:27 [core.py:123] Initializing a V1 LLM engine (v0.29.0) with config: model='/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw', speculative_config=SpeculativeConfig(method='mtp', model='/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw', num_spec_tokens=2), tokenizer='/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=246000, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=exl3, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'ir_enable_torch_wrap': True, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_compute_ple_ngram_ids', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::exl3_ngram_lookup_out'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.PIECEWISE: 1>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 3, 4, 6, 8, 12, 16, 24], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': True, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 24, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='auto', linear_backend='auto')
+(EngineCore pid=534777) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(EngineCore pid=534777) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(EngineCore pid=534777) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(EngineCore pid=534777) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(EngineCore pid=534777) [transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_interleaved', 'mrope_section'}
+(EngineCore pid=534777) INFO 09-23 21:51:28 [registry.py:141] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.
+(EngineCore pid=534777) INFO 09-23 21:51:28 [parallel_state.py:1775] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_589ea819eeab44d4880d10735ed2058b backend=nccl
+(EngineCore pid=534777) INFO 09-23 21:51:28 [parallel_state.py:2119] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A
+(EngineCore pid=534777) INFO 09-23 21:51:28 [gpu_worker.py:429] Using V2 Model Runner
+(EngineCore pid=534777) INFO 09-23 21:51:29 [model_runner.py:382] Loading model from scratch...
+(EngineCore pid=534777) INFO 09-23 21:51:29 [qwen_gdn_linear_attn.py:167] Using Triton/FLA GDN prefill kernel (requested=auto, head_k_dim=128).
+(EngineCore pid=534777) INFO 09-23 21:51:29 [qwen_gdn_linear_attn.py:519] GDN decode kernel: cuda
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.0.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=45.3
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.1.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=34.0
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.2.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=32.9
+(EngineCore pid=534777) INFO 09-23 21:51:29 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:29 [flash_attn.py:897] Using FlashAttention version 2
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.3.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=43.4
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.4.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=32.4
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.5.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=31.6
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.6.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=57.3
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.7.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.4
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.8.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.9.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.7
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.10.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.5
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.11.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.12.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.5
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.13.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.2
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.14.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=53.0
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.15.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.4
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.16.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.7
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.17.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.9
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.18.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:30 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.19.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.4
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.20.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.21.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.22.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=54.4
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.23.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.5
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.24.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.25.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.7
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.26.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.27.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.1
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.28.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.1
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.29.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.8
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.30.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.31.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:31 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.32.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=340.8
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.33.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.7
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.34.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.4
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.35.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.6
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.36.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.4
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.37.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.2
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.38.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.39.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.8
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.40.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.6
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.41.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=40.8
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.42.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.7
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.43.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.0
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.44.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.8
+(EngineCore pid=534777) INFO 09-23 21:51:32 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.45.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=41.3
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.46.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=22.8
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:751] EXL3 trellis PRESCAN ready layer=language_model.model.layers.47.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=17.3
+(EngineCore pid=534777) INFO 09-23 21:51:33 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:51:36 [weight_utils.py:863] Filesystem type for checkpoints: EXT4. Checkpoint size: 67.26 GiB. Available RAM: 41.26 GiB.
+(EngineCore pid=534777) INFO 09-23 21:51:36 [weight_utils.py:893] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre) and the checkpoint size (67.26 GiB) exceeds 90% of available RAM (41.26 GiB).
+(EngineCore pid=534777) Loading safetensors checkpoint shards:   0% Completed | 0/8 [00:00<?, ?it/s]
+(EngineCore pid=534777) INFO 09-23 21:51:38 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=1258291200
+(EngineCore pid=534777) INFO 09-23 21:51:40 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:42 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:44 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:46 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:48 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  12% Completed | 1/8 [00:13<01:37, 13.90s/it]
+(EngineCore pid=534777) INFO 09-23 21:51:50 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:52 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:53 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:55 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:57 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:51:59 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:01 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:02 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  25% Completed | 2/8 [00:27<01:22, 13.74s/it]
+(EngineCore pid=534777) INFO 09-23 21:52:04 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:06 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:08 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:10 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:12 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:14 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:16 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:18 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  38% Completed | 3/8 [00:43<01:13, 14.74s/it]
+(EngineCore pid=534777) INFO 09-23 21:52:20 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:22 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:24 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:26 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:28 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:30 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:32 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:34 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  50% Completed | 4/8 [00:59<01:01, 15.37s/it]
+(EngineCore pid=534777) INFO 09-23 21:52:36 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:38 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:40 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:42 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:44 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:46 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:48 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:50 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  62% Completed | 5/8 [01:15<00:46, 15.53s/it]
+(EngineCore pid=534777) INFO 09-23 21:52:52 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:54 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:56 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:57 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:52:59 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:53:04 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:53:06 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:53:08 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  75% Completed | 6/8 [01:33<00:32, 16.23s/it]
+(EngineCore pid=534777) INFO 09-23 21:53:10 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) INFO 09-23 21:53:12 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  88% Completed | 7/8 [01:39<00:12, 12.92s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards: 100% Completed | 8/8 [01:39<00:00,  8.85s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards: 100% Completed | 8/8 [01:39<00:00, 12.43s/it]
+(EngineCore pid=534777) 
+(EngineCore pid=534777) INFO 09-23 21:53:16 [default_loader.py:430] Loading weights took 99.47 seconds
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=1258291200 temp_peak_bytes=819200
+(EngineCore pid=534777) INFO 09-23 21:53:17 [physical_k_compat.py:64] EXL3 fused layer physical K overrides config/base K: physical=4 configured=3
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3721] EXL3 n-gram embedding ready: 128 shards x 2500012 rows (sharded), K=3, 16 heads, 18.48 GiB packed, table=disk, kernel=ext
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:17 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:18 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:19 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:20 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:24 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:25 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:26 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:27 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:27 [kernel.py:369] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(EngineCore pid=534777) WARNING 09-23 21:53:27 [vllm.py:1924] max_num_scheduled_tokens is set to 2048 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+(EngineCore pid=534777) INFO 09-23 21:53:27 [compilation.py:329] Enabled custom fusions: rope_kvcache_cat_mla
+(EngineCore pid=534777) INFO 09-23 21:53:28 [exl3.py:751] EXL3 trellis PRESCAN ready layer=mtp.layers.48.mlp.experts experts=512 tensors=1536 shards=1 provider=no elapsed_ms=32.4
+(EngineCore pid=534777) INFO 09-23 21:53:28 [exl3.py:2876] EXL3 trellis arena PRESCAN shapes ready for 512 experts (alloc deferred until first load)
+(EngineCore pid=534777) INFO 09-23 21:53:28 [weight_utils.py:863] Filesystem type for checkpoints: EXT4. Checkpoint size: 67.26 GiB. Available RAM: 42.49 GiB.
+(EngineCore pid=534777) INFO 09-23 21:53:28 [weight_utils.py:893] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre) and the checkpoint size (67.26 GiB) exceeds 90% of available RAM (42.49 GiB).
+(EngineCore pid=534777) Loading safetensors checkpoint shards:   0% Completed | 0/8 [00:00<?, ?it/s]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  12% Completed | 1/8 [00:06<00:46,  6.68s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  25% Completed | 2/8 [00:09<00:28,  4.67s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  38% Completed | 3/8 [00:10<00:14,  2.95s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  50% Completed | 4/8 [00:11<00:08,  2.08s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  62% Completed | 5/8 [00:12<00:05,  1.69s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  75% Completed | 6/8 [00:14<00:03,  1.72s/it]
+(EngineCore pid=534777) INFO 09-23 21:53:43 [exl3.py:3004] EXL3 trellis arenas allocated on cuda:0: arenas=3 final_bytes=943718400
+(EngineCore pid=534777) Loading safetensors checkpoint shards:  88% Completed | 7/8 [00:16<00:01,  1.90s/it]
+(EngineCore pid=534777) Loading safetensors checkpoint shards: 100% Completed | 8/8 [00:16<00:00,  2.08s/it]
+(EngineCore pid=534777) 
+(EngineCore pid=534777) INFO 09-23 21:53:45 [default_loader.py:430] Loading weights took 16.68 seconds
+(EngineCore pid=534777) INFO 09-23 21:53:45 [exl3.py:3178] EXL3 trellis arenas: mode=direct_plan before_allocs=1536 after_arenas=3 final_bytes=943718400 temp_peak_bytes=614400
+(EngineCore pid=534777) INFO 09-23 21:53:45 [exl3.py:3304] EXL3 MCG trellis engaged for routed experts: bits=3 experts_local=512 hidden=2560 intermediate_local=640 fused_moe=exl3_moe concurrency=8 (no BF16 expert reconstruct at load)
+(EngineCore pid=534777) INFO 09-23 21:53:46 [model_runner.py:404] Model loading took 49.32 GiB memory and 137.347696 seconds
+(EngineCore pid=534777) INFO 09-23 21:53:46 [topk_topp_sampler.py:62] Using FlashInfer for top-p & top-k sampling.
+(EngineCore pid=534777) INFO 09-23 21:53:46 [interface.py:918] Setting attention block size to 1600 tokens to ensure that attention page size is >= mamba page size.
+(EngineCore pid=534777) INFO 09-23 21:53:46 [interface.py:942] Padding mamba page size by 0.88% to ensure that mamba page size and attention page size are exactly equal.
+(EngineCore pid=534777) INFO 09-23 21:53:46 [utils.py:306] Using BLNHC KV cache layout.
+(EngineCore pid=534777) INFO 09-23 21:53:59 [backends.py:1094] Using cache directory: /home/base-node/.cache/vllm/torch_compile_cache/c938a71238/rank_0_0/backbone for vLLM's torch.compile
+(EngineCore pid=534777) INFO 09-23 21:53:59 [backends.py:1155] Dynamo bytecode transform time: 10.67 s
+(EngineCore pid=534777) INFO 09-23 21:54:18 [backends.py:393] Compiling a graph for compile range (1, 2048) takes 19.12 s
+(EngineCore pid=534777) INFO 09-23 21:54:21 [backends.py:920] collected artifacts: 52 entries, 52 artifacts, 18755162 bytes total
+(EngineCore pid=534777) INFO 09-23 21:54:21 [decorators.py:719] saved AOT compiled function to /home/base-node/.cache/vllm/torch_compile_cache/torch_aot_compile/292779d843c565d2d6ecf52174ae04bdd86f6a39bf7391f94c6e65f650d4e0ab/rank_0_0/model
+(EngineCore pid=534777) INFO 09-23 21:54:21 [monitor.py:53] torch.compile took 33.04 s in total
+(EngineCore pid=534777) /home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+(EngineCore pid=534777)   warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+(EngineCore pid=534777) INFO 09-23 21:55:22 [monitor.py:81] Initial profiling/warmup run took 60.98 s
+(EngineCore pid=534777) INFO 09-23 21:55:23 [backends.py:1094] Using cache directory: /home/base-node/.cache/vllm/torch_compile_cache/c938a71238/rank_0_0/eagle_head for vLLM's torch.compile
+(EngineCore pid=534777) INFO 09-23 21:55:23 [backends.py:1155] Dynamo bytecode transform time: 0.48 s
+(EngineCore pid=534777) INFO 09-23 21:55:25 [backends.py:393] Compiling a graph for compile range (1, 2048) takes 2.06 s
+(EngineCore pid=534777) INFO 09-23 21:55:25 [backends.py:920] collected artifacts: 2 entries, 2 artifacts, 2275157 bytes total
+(EngineCore pid=534777) INFO 09-23 21:55:25 [decorators.py:719] saved AOT compiled function to /home/base-node/.cache/vllm/torch_compile_cache/torch_aot_compile/925ecbdf3230f3702136adf7297b1e6d631c32d870b0ce7df50d25dadb7e4a6e/rank_0_0/model
+(EngineCore pid=534777) INFO 09-23 21:55:25 [monitor.py:53] torch.compile took 2.73 s in total
+(EngineCore pid=534777) INFO 09-23 21:55:25 [monitor.py:81] Initial profiling/warmup run took 0.02 s
+(EngineCore pid=534777) INFO 09-23 21:55:28 [speculator.py:120] Fused multi-step draft decode is not supported by attention backend(s) QWEN4_EXP_EXP_QSA_STATE; falling back to rebuilding attention metadata between draft steps.
+(EngineCore pid=534777) Capturing CUDA graphs (PIECEWISE):   0%|          | 0/9 [00:00<?, ?it/s]/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/torch/cuda/graphs.py:169: UserWarning: The CUDA Graph is empty. This usually means that the graph was attempted to be captured on wrong device or stream. (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/cuda/CUDAGraph.cpp:210.)
+(EngineCore pid=534777)   super().capture_end()
+(EngineCore pid=534777) Capturing CUDA graphs (PIECEWISE):  11%|█         | 1/9 [00:02<00:21,  2.70s/it]Capturing CUDA graphs (PIECEWISE):  22%|██▏       | 2/9 [00:04<00:13,  1.95s/it]Capturing CUDA graphs (PIECEWISE):  33%|███▎      | 3/9 [00:05<00:09,  1.51s/it]Capturing CUDA graphs (PIECEWISE):  44%|████▍     | 4/9 [00:05<00:05,  1.02s/it]Capturing CUDA graphs (PIECEWISE):  56%|█████▌    | 5/9 [00:05<00:03,  1.17it/s]Capturing CUDA graphs (PIECEWISE):  67%|██████▋   | 6/9 [00:07<00:02,  1.08it/s]Capturing CUDA graphs (PIECEWISE):  78%|███████▊  | 7/9 [00:07<00:01,  1.44it/s]Capturing CUDA graphs (PIECEWISE):  89%|████████▉ | 8/9 [00:08<00:00,  1.22it/s]/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/torch/cuda/graphs.py:169: UserWarning: The CUDA Graph is empty. This usually means that the graph was attempted to be captured on wrong device or stream. (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/cuda/CUDAGraph.cpp:210.)
+(EngineCore pid=534777)   super().capture_end()
+(EngineCore pid=534777) Capturing CUDA graphs (PIECEWISE): 100%|██████████| 9/9 [00:10<00:00,  1.26s/it]Capturing CUDA graphs (PIECEWISE): 100%|██████████| 9/9 [00:10<00:00,  1.17s/it]
+(EngineCore pid=534777) INFO 09-23 21:55:39 [speculator.py:151] Capturing model for speculator...
+(EngineCore pid=534777) Capturing prefill CUDA graphs (PIECEWISE):   0%|          | 0/9 [00:00<?, ?it/s]Capturing prefill CUDA graphs (PIECEWISE):  11%|█         | 1/9 [00:00<00:03,  2.36it/s]Capturing prefill CUDA graphs (PIECEWISE): 100%|██████████| 9/9 [00:00<00:00, 18.00it/s]
+(EngineCore pid=534777) INFO 09-23 21:55:40 [model_runner.py:960] Graph capturing finished in 12 secs, took 0.56 GiB
+(EngineCore pid=534777) INFO 09-23 21:55:41 [gpu_worker.py:625] Available KV cache memory: 6.78 GiB
+(EngineCore pid=534777) INFO 09-23 21:55:41 [gpu_worker.py:640] CUDA graph memory profiling is enabled (default since v0.21.0). The current --gpu-memory-utilization=0.9200 is equivalent to --gpu-memory-utilization=0.9111 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.9289. To disable, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0.
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374] EngineCore failed to start.
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374] Traceback (most recent call last):
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 1336, in run_engine_core
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     return func(*args, **kwargs)
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]            ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 1093, in __init__
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     super().__init__(
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 145, in __init__
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     kv_cache_config = self._initialize_kv_caches(vllm_config)
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     return func(*args, **kwargs)
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]            ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 319, in _initialize_kv_caches
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     kv_cache_configs = get_kv_cache_configs(
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]                        ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/core/kv_cache_utils.py", line 2331, in get_kv_cache_configs
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     _check_enough_kv_cache_memory(
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/core/kv_cache_utils.py", line 879, in _check_enough_kv_cache_memory
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374]     raise ValueError(
+(EngineCore pid=534777) ERROR 09-23 21:55:41 [core.py:1374] ValueError: To serve at least one request with the model's max seq len (246000), (6.83 GiB KV cache is needed, which is larger than the available KV cache memory (6.74 GiB). Based on the available memory, the estimated maximum model length is 241600. Try increasing `gpu_memory_utilization` (which also controls CPU memory on the CPU backend) or decreasing `max_model_len` when initializing the engine. See https://docs.vllm.ai/en/latest/configuration/conserving_memory/ for more details.
+(EngineCore pid=534777) Process EngineCore:
+(EngineCore pid=534777) Traceback (most recent call last):
+(EngineCore pid=534777)   File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore pid=534777)     self.run()
+(EngineCore pid=534777)   File "/usr/lib/python3.12/multiprocessing/process.py", line 108, in run
+(EngineCore pid=534777)     self._target(*self._args, **self._kwargs)
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 1378, in run_engine_core
+(EngineCore pid=534777)     raise e
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 1336, in run_engine_core
+(EngineCore pid=534777)     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=534777)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=534777)     return func(*args, **kwargs)
+(EngineCore pid=534777)            ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 1093, in __init__
+(EngineCore pid=534777)     super().__init__(
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 145, in __init__
+(EngineCore pid=534777)     kv_cache_config = self._initialize_kv_caches(vllm_config)
+(EngineCore pid=534777)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=534777)     return func(*args, **kwargs)
+(EngineCore pid=534777)            ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 319, in _initialize_kv_caches
+(EngineCore pid=534777)     kv_cache_configs = get_kv_cache_configs(
+(EngineCore pid=534777)                        ^^^^^^^^^^^^^^^^^^^^^
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/core/kv_cache_utils.py", line 2331, in get_kv_cache_configs
+(EngineCore pid=534777)     _check_enough_kv_cache_memory(
+(EngineCore pid=534777)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/core/kv_cache_utils.py", line 879, in _check_enough_kv_cache_memory
+(EngineCore pid=534777)     raise ValueError(
+(EngineCore pid=534777) ValueError: To serve at least one request with the model's max seq len (246000), (6.83 GiB KV cache is needed, which is larger than the available KV cache memory (6.74 GiB). Based on the available memory, the estimated maximum model length is 241600. Try increasing `gpu_memory_utilization` (which also controls CPU memory on the CPU backend) or decreasing `max_model_len` when initializing the engine. See https://docs.vllm.ai/en/latest/configuration/conserving_memory/ for more details.
+[rank0]:[W923 21:55:43.413235141 ProcessGroupNCCL.cpp:1624] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+(APIServer pid=534559) INFO 09-23 21:55:48 [utils.py:620] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=534559) Traceback (most recent call last):
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/bin/vllm", line 6, in <module>
+(APIServer pid=534559)     sys.exit(main())
+(APIServer pid=534559)              ^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/cli/main.py", line 97, in main
+(APIServer pid=534559)     args.dispatch_function(args)
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/cli/serve.py", line 153, in cmd
+(APIServer pid=534559)     uvloop.run(run_server(args))
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/uvloop/__init__.py", line 96, in run
+(APIServer pid=534559)     return __asyncio.run(
+(APIServer pid=534559)            ^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+(APIServer pid=534559)     return runner.run(main)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+(APIServer pid=534559)     return self._loop.run_until_complete(task)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=534559)     return await main
+(APIServer pid=534559)            ^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 176, in run_server
+(APIServer pid=534559)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 190, in run_server_worker
+(APIServer pid=534559)     async with build_async_engine_client(
+(APIServer pid=534559)   File "/usr/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=534559)     return await anext(self.gen)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 58, in build_async_engine_client
+(APIServer pid=534559)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=534559)   File "/usr/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=534559)     return await anext(self.gen)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 94, in build_async_engine_client_from_engine_args
+(APIServer pid=534559)     async_llm = AsyncLLM.from_vllm_config(
+(APIServer pid=534559)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 227, in from_vllm_config
+(APIServer pid=534559)     return cls(
+(APIServer pid=534559)            ^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 156, in __init__
+(APIServer pid=534559)     self.engine_core = EngineCoreClient.make_async_mp_client(
+(APIServer pid=534559)                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=534559)     return func(*args, **kwargs)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 139, in make_async_mp_client
+(APIServer pid=534559)     return AsyncMPClient(*client_args)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=534559)     return func(*args, **kwargs)
+(APIServer pid=534559)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 991, in __init__
+(APIServer pid=534559)     super().__init__(
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 609, in __init__
+(APIServer pid=534559)     with launch_core_engines(
+(APIServer pid=534559)   File "/usr/lib/python3.12/contextlib.py", line 144, in __exit__
+(APIServer pid=534559)     next(self.gen)
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/utils.py", line 1240, in launch_core_engines
+(APIServer pid=534559)     wait_for_engine_startup(
+(APIServer pid=534559)   File "/home/base-node/.codex_tasks/qwen38-flashnext-r0/venv/lib/python3.12/site-packages/vllm/v1/engine/utils.py", line 1320, in wait_for_engine_startup
+(APIServer pid=534559)     raise RuntimeError(
+(APIServer pid=534559) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}
