@@ -14,8 +14,10 @@ GRAPH_PROBE="${K1Q2E_GRAPH_PROBE:-0}"
 if [[ "$GRAPH_PROBE" == 1 ]]; then
   CONTEXTS=(16000)
   EAGER=0
+  export VLLM_QWEN_KVMEM_Q2E_GRAPH_PROBE=1
 elif [[ "$GRAPH_PROBE" == 0 ]]; then
   EAGER=1
+  unset VLLM_QWEN_KVMEM_Q2E_GRAPH_PROBE
 else
   echo "REFUSE: K1Q2E_GRAPH_PROBE must be 0 or 1" >&2
   exit 2

@@ -606,6 +606,19 @@ def run_streaming_runtime(
     main_metadata: Any,
     side_metadata: Any,
 ) -> None:
+    # Diagnostic graph probe only: vLLM captures with synthetic all-padding
+    # forwards whose slot mapping is not a real QSA request. Keep them out of
+    # the CPU authority, LRU, and WRITE verification state.
+    if os.environ.get("VLLM_QWEN_KVMEM_Q2E_GRAPH_PROBE") == "1":
+        from vllm.forward_context import get_forward_context
+
+        capture_active = query.is_cuda and torch.cuda.is_current_stream_capturing()
+        padding = get_forward_context().is_padding
+        if capture_active or (
+            padding is not None and bool(torch.all(padding).item())
+        ):
+            output.zero_()
+            return
     if query.is_cuda and torch.cuda.is_current_stream_capturing():
         raise RuntimeError("Q2D streaming runtime requires eager execution")
     num_tokens = int(main_metadata.num_actual_tokens)
