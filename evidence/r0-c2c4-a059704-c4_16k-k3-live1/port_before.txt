@@ -1,0 +1,5 @@
+timestamp_utc=2026-09-23T16:38:52Z
+host=127.0.0.1
+port=8002
+listeners=0
+state=CLOSED

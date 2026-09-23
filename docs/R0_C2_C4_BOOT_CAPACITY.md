@@ -147,8 +147,45 @@ tok/s**, and median TTFT **71.61 s**; k=2 had a 275,337-token pool, **5.0558
 tok/s**, and **71.26 s**. Both passed semantic and concurrency-overlap gates,
 with zero discarded waves, preemptions, or Xid events and clean 14 MiB GPU /
 closed-port exits. k=3 is about 0.6% slower in aggregate median; its p95
-TTFT is about 0.6% higher and p95 TPOT about 0.8% lower. None establishes a
-repeatable >=5% benefit. Evidence:
+TTFT is about 0.6% higher and p95 TPOT about 0.8% lower. Neither establishes
+the preregistered >=5% benefit. Evidence:
 [`k=3`](../evidence/r0-c2c4-a059704-c2_80k-k3-live1/),
 [`k=2`](../evidence/r0-c2c4-a059704-c2_80k-k2-live1/).
-The C4/16K pair remains to be qualified separately.
+
+The C4/16K pair also completed at the same exact source and manifest. Its
+15,533-token prompts were submitted in four concurrent slots for each of ten
+valid measured waves. k=3 had a 268,742-token KV pool, median aggregate output
+**22.3037 tok/s**, median TTFT **24.65 s**, median TPOT **73.80 ms**, p95 TTFT
+**36.95 s**, and p95 TPOT **134.25 ms**. k=2 had a 275,337-token pool,
+**22.3565 tok/s**, **24.57 s** median TTFT, **74.63 ms** median TPOT,
+**36.83 s** p95 TTFT, and **137.45 ms** p95 TPOT. Both passed semantic and
+concurrency-overlap gates, with 40 requests each, peak running four, zero
+discarded waves, preemptions, or Xid events, and clean 14 MiB GPU /
+closed-port exits. k=3 is about 0.2% slower in aggregate median. Its p95
+TPOT is about 2.3% lower, but p95 TTFT is about 0.3% higher; this is not a
+>=5% aggregate-throughput improvement. Evidence:
+[`k=3`](../evidence/r0-c2c4-a059704-c4_16k-k3-live1/),
+[`k=2`](../evidence/r0-c2c4-a059704-c4_16k-k2-live1/).
+
+### Reduced-graph decision
+
+The approved `[1,2,4,8,16,24]` profile restores 240K startup admission
+for both k=2 and k=3 and yields three valid matched load points:
+
+| Load | k=2 aggregate median tok/s | k=3 aggregate median tok/s | k=3 change |
+| --- | ---: | ---: | ---: |
+| C2 / 16K | 20.2705 | 20.0135 | -1.27% |
+| C2 / 80K | 5.0558 | 5.0234 | -0.64% |
+| C4 / 16K | 22.3565 | 22.3037 | -0.24% |
+
+These are full-request aggregate output rates including prefill, not pure
+decode tok/s. Each cell had one live engine and ten measured waves; there is
+not a second independent repetition of this matrix. No load point meets the
+preregistered >=5% k=3 aggregate-throughput advantage over k=2. Therefore
+this scan does **not** justify switching C2/C4 from k=2 to k=3 or adding a
+dynamic k policy. It does not overturn the separate C1 k=3 qualification.
+The 240K value is the service `max_model_len` used for admission; no 240K
+prompt was benchmarked here. C4/32K remains unmeasured because its historical
+exact 27,250-token input was unavailable; it was not replaced by a synthetic
+prompt. Earlier default-graph cells are a separate protocol and are not
+pooled with these results.
