@@ -153,6 +153,45 @@ def _wait_for_idle(
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
 
+def _wait_for_prefix_cache_metrics(
+    base_url: str,
+    timeout: float,
+    wait_seconds: float,
+    before: dict[str, float],
+    *,
+    require_hit: bool,
+    where: str,
+) -> dict[str, float]:
+    """Wait for this request's cache counters to reach the metrics endpoint."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        metrics = _fetch_metrics(base_url, timeout)
+        assert_idle(metrics, where)
+        deltas = {
+            key: metrics[key] - before[key]
+            for key in PREFIX_METRICS
+        }
+        if any(value < 0 for value in deltas.values()):
+            raise ProbeFailure("prefix-cache counters decreased/reset during the probe")
+
+        queries_propagated = deltas["queries"] > 0
+        hits_propagated = not require_hit or deltas["hits"] > 0
+        if queries_propagated and hits_propagated:
+            return metrics
+
+        if time.monotonic() >= deadline:
+            waiting_for = ["query counter"] if not queries_propagated else []
+            if not hits_propagated:
+                waiting_for.append("hit counter")
+            raise ProbeFailure(
+                f"prefix-cache metrics did not propagate {', '.join(waiting_for)} "
+                f"{where} within {wait_seconds:g}s "
+                f"(queries_delta={deltas['queries']:g}, "
+                f"hits_delta={deltas['hits']:g})"
+            )
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+
+
 def _read_token_ids(path: Path) -> list[int]:
     try:
         raw = path.read_text(encoding="utf-8")
@@ -287,8 +326,16 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         before = _fetch_metrics(base_url, args.timeout)
         assert_idle(before, f"before request {index + 1}")
         completion = _read_sse_completion(base_url, model, token_ids, args)
-        after = _wait_for_idle(
+        _wait_for_idle(
             base_url, args.timeout, args.idle_timeout, f"after request {index + 1}"
+        )
+        after = _wait_for_prefix_cache_metrics(
+            base_url,
+            args.timeout,
+            args.metrics_timeout,
+            before,
+            require_hit=index == args.repeats - 1,
+            where=f"after request {index + 1}",
         )
         delta = {
             key: after[key] - before[key]
@@ -331,6 +378,12 @@ def main() -> int:
     parser.add_argument("--min-prompt-tokens", type=int, default=2048)
     parser.add_argument("--timeout", type=float, default=30.0, help="per HTTP operation timeout")
     parser.add_argument("--idle-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--metrics-timeout",
+        type=float,
+        default=30.0,
+        help="maximum wait for prefix-cache counters to reach /metrics",
+    )
     parser.add_argument("--out", type=Path, help="write the JSON report to this path")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
@@ -341,8 +394,11 @@ def main() -> int:
         parser.error("--max-tokens must be positive")
     if args.min_prompt_tokens < 2:
         parser.error("--min-prompt-tokens must be at least 2")
-    if args.timeout <= 0 or args.idle_timeout < 0:
-        parser.error("timeouts must be positive (idle timeout may be zero)")
+    if args.timeout <= 0 or args.idle_timeout < 0 or args.metrics_timeout <= 0:
+        parser.error(
+            "--timeout and --metrics-timeout must be positive "
+            "(--idle-timeout may be zero)"
+        )
 
     try:
         report = run_probe(args)

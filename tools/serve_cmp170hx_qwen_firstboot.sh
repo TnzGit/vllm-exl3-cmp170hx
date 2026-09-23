@@ -20,6 +20,11 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8002}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
+PREFIX_CACHING="${PREFIX_CACHING:-0}"
+case "$PREFIX_CACHING" in
+  0|1) ;;
+  *) echo "REFUSE: PREFIX_CACHING must be 0 or 1" >&2; exit 2 ;;
+esac
 
 if [[ "$PORT" == "8000" && "${ALLOW_PORT_8000:-0}" != "1" ]]; then
   echo "REFUSE: port 8000 is reserved for the existing production service." >&2
@@ -81,12 +86,19 @@ ARGS=(
   --port "$PORT"
   --quantization exl3
   --language-model-only
-  --no-enable-prefix-caching
   --max-model-len "$MAX_MODEL_LEN"
   --max-num-seqs "$MAX_NUM_SEQS"
   --gpu-memory-utilization "$GPU_MEM_UTIL"
   --compilation-config "$COMPILATION_CONFIG"
 )
+
+# Default remains off. Enable only for an isolated compatibility probe with
+# fresh engine state, so no cached KV/SSM/MTP state can cross configurations.
+if [[ "$PREFIX_CACHING" == "1" ]]; then
+  ARGS+=(--enable-prefix-caching)
+else
+  ARGS+=(--no-enable-prefix-caching)
+fi
 
 # Optional explicit prefill/decode scheduling budget. An empty value retains
 # vLLM's installed default, so existing launch profiles are unchanged.
@@ -95,8 +107,8 @@ if [[ -n "${MAX_NUM_BATCHED_TOKENS:-}" ]]; then
 fi
 
 # NUM_SPEC_TOKENS=0 keeps the no-draft profile; any other value enables the
-# Qwen4Exp MTP draft. Requires the text-mtp patch stack. Prefix caching stays
-# off for every MTP cell so the open hybrid/MTP cache issues are not a confound.
+# Qwen4Exp MTP draft. Requires the text-mtp patch stack. Qualification runs
+# leave prefix caching off; the separate probe may opt in explicitly.
 NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-0}"
 if [[ "$NUM_SPEC_TOKENS" != "0" ]]; then
   ARGS+=(--speculative-config "{\"method\":\"qwen4_exp_mtp\",\"num_speculative_tokens\":${NUM_SPEC_TOKENS}}")
@@ -138,6 +150,7 @@ printf '  %-28s %s\n' \
   "MAX_NUM_BATCHED_TOKENS" "${MAX_NUM_BATCHED_TOKENS:-<default>}" \
   "PORT" "$PORT" \
   "NUM_SPEC_TOKENS" "$NUM_SPEC_TOKENS" \
+  "PREFIX_CACHING" "$PREFIX_CACHING" \
   "VLLM_EXL3_MODEL_DIR" "$VLLM_EXL3_MODEL_DIR" \
   "VLLM_EXL3_TRELLIS_ARENA" "$VLLM_EXL3_TRELLIS_ARENA" \
   "VLLM_EXL3_ARENA_PRESCAN" "$VLLM_EXL3_ARENA_PRESCAN" \
