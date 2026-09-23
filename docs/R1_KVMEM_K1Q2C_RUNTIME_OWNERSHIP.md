@@ -505,3 +505,18 @@ Q2E-3 remains a single frozen 160K, single-request, eager, MTP-off result. It
 does not qualify 240K, multiple concurrent requests, persistent multi-turn
 state, recurrent-state restoration, MTP, NVMe backing, or a production-grade
 asynchronous path.
+
+## Q2E exact-context performance sweep
+
+A later single-boot benchmark at live SHA `61a8eb2f8dde5e48f025024589494dbf5b9178cf`
+measured exact 16K, 80K, 160K, and 240K token-ID cases with the current direct
+path, consumer barrier, eager execution, MTP off, prefix caching off, and a
+fixed 256-token decode denominator. All four cells were semantic and evidence
+VALID. Client-observed prefill throughput was 1,120.49, 1,105.72, 889.55, and
+715.40 tokens/s; decode throughput was 9.06, 8.62, 8.20, and 7.92 tokens/s.
+
+The 240K cell reached READ peak 4,032, WRITE peak 128, and per-subbatch working
+set peak 4,087 without exceeding the 4,160-page cap. This extends benchmark
+coverage to 240K but does not replace a repeated 240K qualification. Full
+methodology, exact timings, machine identity, caveats, artifact paths, and the
+tracked JSON result are in `docs/R1_KVMEM_Q2E_CONTEXT_BENCHMARK.md`.
