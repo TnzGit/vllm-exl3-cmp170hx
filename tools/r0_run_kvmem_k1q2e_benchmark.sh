@@ -12,7 +12,17 @@ PORT="${PORT:-8002}"
 CONTEXTS=(16000 80000 160000 240000)
 GRAPH_PROBE="${K1Q2E_GRAPH_PROBE:-0}"
 if [[ "$GRAPH_PROBE" == 1 ]]; then
-  CONTEXTS=(16000)
+  read -r -a CONTEXTS <<< "${K1Q2E_GRAPH_CONTEXTS:-16000}"
+  if (( ${#CONTEXTS[@]} == 0 )); then
+    echo "REFUSE: K1Q2E_GRAPH_CONTEXTS is empty" >&2
+    exit 2
+  fi
+  for context in "${CONTEXTS[@]}"; do
+    case "$context" in
+      16000|80000|160000|240000) ;;
+      *) echo "REFUSE: unsupported graph context $context" >&2; exit 2 ;;
+    esac
+  done
   EAGER=0
   export VLLM_QWEN_KVMEM_Q2E_GRAPH_PROBE=1
 elif [[ "$GRAPH_PROBE" == 0 ]]; then
