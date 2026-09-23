@@ -139,4 +139,16 @@ load point. These are full request aggregate throughput numbers, not pure
 decode tokens per second. Evidence:
 [`k=2`](../evidence/r0-c2c4-a059704-c2_16k-k2-live1/),
 [`k=3`](../evidence/r0-c2c4-a059704-c2_16k-k3-live1/).
-The C2/80K and C4/16K cells remain to be qualified separately.
+
+C2/80K also completed at the same exact source and manifest. Its 79,533-token
+prompts were submitted in two concurrent slots for each of ten valid measured
+waves. k=3 had a 268,742-token KV pool, median aggregate output **5.0234
+tok/s**, and median TTFT **71.61 s**; k=2 had a 275,337-token pool, **5.0558
+tok/s**, and **71.26 s**. Both passed semantic and concurrency-overlap gates,
+with zero discarded waves, preemptions, or Xid events and clean 14 MiB GPU /
+closed-port exits. k=3 is about 0.6% slower in aggregate median; its p95
+TTFT is about 0.6% higher and p95 TPOT about 0.8% lower. None establishes a
+repeatable >=5% benefit. Evidence:
+[`k=3`](../evidence/r0-c2c4-a059704-c2_80k-k3-live1/),
+[`k=2`](../evidence/r0-c2c4-a059704-c2_80k-k2-live1/).
+The C4/16K pair remains to be qualified separately.

@@ -1,0 +1,16 @@
+run_id=20260923T161407Z-553599
+point=c2_80k
+k=2
+expected_sha=a059704a2fd01f9419174b446862bfadc47b9e92
+repo_head=a059704a2fd01f9419174b446862bfadc47b9e92
+repo_status=clean
+model_dir=/home/base-node/models/Lygodactylus-Qwen3.8-Flash-Next-Uncensored-exl3-3bpw
+model_config_sha256=a3ce61dd00c9edf7d7e8e645c55fcdda9c120289270bed2ad68d031eb312c117
+installed_exl3_source_sha256=dc7d3dd16a39aed839f04f68b1ee30ce2cf186b5e206c847273964f809347aba
+point_prompt_tokens=79533
+gpu_mem_util=0.92
+max_model_len=240000
+max_num_seqs=4
+max_num_batched_tokens=auto
+cudagraph_capture_sizes=[1,2,4,8,16,24]
+mtp_k=2
